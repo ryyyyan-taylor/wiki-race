@@ -223,8 +223,17 @@ export interface ParsedArticle {
   detailsHtml: string;
 }
 
-export async function fetchArticle(canonicalTitle: string): Promise<ParsedArticle> {
-  const data = await wikiApi({ action: "parse", page: canonicalTitle, prop: "text|displaytitle|sections" }, 21600);
+// `title` doesn't need to be pre-resolved — `redirects: "1"` resolves it in
+// the same request, so a click no longer costs a separate resolve call
+// before the (much heavier) parse call. Returns null for a title that
+// doesn't exist, rather than throwing, so callers can tell "not found" from
+// a real failure.
+export async function fetchArticle(title: string): Promise<ParsedArticle | null> {
+  const data = await wikiApi(
+    { action: "parse", page: title, redirects: "1", prop: "text|displaytitle|sections" },
+    21600
+  );
+  if (data.error?.code === "missingtitle") return null;
   if (data.error || !data.parse) throw new Error("Wikipedia parse failed");
   const sections: Section[] = data.parse.sections ?? [];
   const tocHtml = buildTocHtml(excludeExtraSections(sections));

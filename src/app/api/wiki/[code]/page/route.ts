@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { authenticatePlayer } from "@/lib/auth";
 import { collapseToShortestPath } from "@/lib/shortest-path";
-import { fetchArticle, resolveCanonicalTitle } from "@/lib/wiki";
+import { fetchArticle } from "@/lib/wiki";
 import { withErrorHandling } from "@/lib/api-route";
 
 export const POST = withErrorHandling(async (request: Request, { params }: { params: Promise<{ code: string }> }) => {
@@ -39,23 +39,25 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   }
   if (!race) return NextResponse.json({ error: "No active race" }, { status: 409 });
 
-  // Nor do these two — the race_player row lookup and resolving the
-  // clicked title against Wikipedia are unrelated.
-  const [racePlayerResult, canonicalTitle] = await Promise.all([
+  const [racePlayerResult, article] = await Promise.all([
     supabase.from("race_players").select("*").eq("race_id", race.id).eq("player_id", playerId).single(),
-    resolveCanonicalTitle(title),
+    // Resolves redirects and parses in one Wikipedia request instead of
+    // two sequential ones — the biggest single latency win available here,
+    // since this call (unlike the Supabase ones) can't run concurrently
+    // with anything before it that depends on its result.
+    fetchArticle(title),
   ]);
   const racePlayer = racePlayerResult.data;
 
   if (!racePlayer || racePlayer.status !== "racing") {
     return NextResponse.json({ error: "You are not racing" }, { status: 409 });
   }
-  if (!canonicalTitle) return NextResponse.json({ status: "not_found" });
+  if (!article) return NextResponse.json({ status: "not_found" });
+  const canonicalTitle = article.title;
 
   // A reload/resume of the page the player is already on: re-serve it
   // without recording a duplicate visit or re-checking banned pages.
   if (canonicalTitle === racePlayer.current_page) {
-    const article = await fetchArticle(canonicalTitle);
     return NextResponse.json({
       status: "ok",
       title: article.title,
@@ -70,27 +72,29 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     return NextResponse.json({ status: "blocked", title: canonicalTitle });
   }
 
-  const article = await fetchArticle(canonicalTitle);
-
   const sequenceIndex = racePlayer.pages_visited_count;
-  const pagesVisitedCount = racePlayer.pages_visited_count + 1;
-  await Promise.all([
-    supabase.from("visits").insert({
-      race_id: race.id,
-      player_id: playerId,
-      page_title: article.title,
-      sequence_index: sequenceIndex,
-    }),
-    supabase
-      .from("race_players")
-      .update({ pages_visited_count: pagesVisitedCount, current_page: article.title })
-      .eq("race_id", race.id)
-      .eq("player_id", playerId),
-  ]);
-  // No broadcast needed — that race_players update is itself what other
-  // players' Postgres Changes subscriptions pick up as live progress.
+  const pagesVisitedCount = sequenceIndex + 1;
+  const isWin = canonicalTitle === race.target_page;
+  const visitInsert = supabase
+    .from("visits")
+    .insert({ race_id: race.id, player_id: playerId, page_title: canonicalTitle, sequence_index: sequenceIndex });
 
-  if (article.title !== race.target_page) {
+  if (!isWin) {
+    // Nothing in this response depends on these having landed yet — let
+    // them finish after the response goes out instead of making the click
+    // wait on a Supabase round-trip it doesn't need. `race_players`
+    // updating is itself what other players' subscriptions pick up as
+    // live progress, so no separate broadcast either way.
+    after(async () => {
+      await Promise.all([
+        visitInsert,
+        supabase
+          .from("race_players")
+          .update({ pages_visited_count: pagesVisitedCount, current_page: canonicalTitle })
+          .eq("race_id", race.id)
+          .eq("player_id", playerId),
+      ]);
+    });
     return NextResponse.json({
       status: "ok",
       title: article.title,
@@ -101,19 +105,28 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     });
   }
 
-  const [{ data: visits }] = await Promise.all([
-    supabase
-      .from("visits")
-      .select("page_title")
-      .eq("race_id", race.id)
-      .eq("player_id", playerId)
-      .order("sequence_index", { ascending: true }),
+  // Winning is the one case that does need this visit committed first —
+  // the shortest-path query right after reads it back.
+  await Promise.all([
+    visitInsert,
     supabase
       .from("race_players")
-      .update({ status: "finished", finished_at: new Date().toISOString() })
+      .update({
+        pages_visited_count: pagesVisitedCount,
+        current_page: canonicalTitle,
+        status: "finished",
+        finished_at: new Date().toISOString(),
+      })
       .eq("race_id", race.id)
       .eq("player_id", playerId),
   ]);
+
+  const { data: visits } = await supabase
+    .from("visits")
+    .select("page_title")
+    .eq("race_id", race.id)
+    .eq("player_id", playerId)
+    .order("sequence_index", { ascending: true });
   const shortestPath = collapseToShortestPath((visits ?? []).map((v) => v.page_title));
 
   await supabase
