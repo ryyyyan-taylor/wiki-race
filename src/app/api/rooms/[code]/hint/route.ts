@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { authenticatePlayer } from "@/lib/auth";
-import { getIntroSentences, splitSentences } from "@/lib/wiki";
+import { getIntroSentences } from "@/lib/wiki";
 import { withErrorHandling } from "@/lib/api-route";
 
 export const POST = withErrorHandling(async (request: Request, { params }: { params: Promise<{ code: string }> }) => {
@@ -31,8 +31,21 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   }
 
   // Each call reveals one more sentence than the last hint already shown,
-  // up to however many the intro actually has.
-  const alreadyRevealed = race.hint_text ? splitSentences(race.hint_text).length : 0;
+  // up to however many the intro actually has. Finding "how many" by
+  // re-splitting the stored hint_text is fragile — even a well-tuned
+  // sentence splitter can disagree with itself once a fragment sits at a
+  // different position in a shorter string, silently maxing out the count
+  // and permanently disabling the hint button. Matching hint_text as an
+  // exact prefix of the freshly split sentences sidesteps that entirely.
+  let alreadyRevealed = 0;
+  if (race.hint_text) {
+    for (let i = 1; i <= sentences.length; i++) {
+      if (sentences.slice(0, i).join(" ") === race.hint_text) {
+        alreadyRevealed = i;
+        break;
+      }
+    }
+  }
   const nextCount = Math.min(alreadyRevealed + 1, sentences.length);
   const hint = sentences.slice(0, nextCount).join(" ");
   const hasMore = nextCount < sentences.length;

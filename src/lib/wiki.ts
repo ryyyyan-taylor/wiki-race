@@ -111,8 +111,16 @@ export async function searchArticleTitles(query: string): Promise<string[]> {
 }
 
 export function splitSentences(text: string): string[] {
-  const sentences = text.match(/[^.!?]*[.!?]+(?=\s|$)/g);
-  return sentences ? sentences.map((s) => s.trim()).filter(Boolean) : [text.trim()];
+  // A bare period/exclamation/question-mark split treats "U.S." or "Dwight
+  // D. Eisenhower" as multiple sentences, breaking mid-abbreviation --
+  // temporarily mask single-capital-letter-plus-period abbreviations (with
+  // a character that can't appear in real article text) so they can't be
+  // mistaken for a sentence boundary, then restore them afterward.
+  const DOT_MASK = "\u0000";
+  const protectedText = text.replace(/\b([A-Z])\./g, `$1${DOT_MASK}`);
+  const sentences = protectedText.match(/[^.!?]*[.!?]+(?=\s|$)/g);
+  const restore = (s: string) => s.split(DOT_MASK).join(".").trim();
+  return sentences ? sentences.map(restore).filter(Boolean) : [restore(protectedText)];
 }
 
 // One hint call reveals one more sentence than the last — the route counts
