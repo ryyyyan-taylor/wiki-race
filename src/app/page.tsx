@@ -10,6 +10,7 @@ const ROOM_LIST_POLL_MS = 5_000;
 export default function Home() {
   const router = useRouter();
   const [name, setName] = useState(getSavedName);
+  const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -39,6 +40,10 @@ export default function Home() {
   async function handleJoin(code: string) {
     if (!name.trim()) {
       setError("Enter your name first");
+      return;
+    }
+    if (code.length !== 5) {
+      setError("Room codes are 5 characters");
       return;
     }
     setBusy(true);
@@ -85,6 +90,27 @@ export default function Home() {
           <div className="rounded-xl border p-6 flex flex-col items-center gap-4 dark:border-zinc-700">
             <h2 className="text-xl font-semibold">Join</h2>
             <OpenRoomsList onJoin={handleJoin} busy={busy} />
+            <div className="w-full flex items-center gap-2 text-xs text-zinc-500">
+              <div className="flex-1 border-t dark:border-zinc-700" />
+              or by code
+              <div className="flex-1 border-t dark:border-zinc-700" />
+            </div>
+            <div className="w-full flex gap-2">
+              <input
+                className="flex-1 min-w-0 rounded-lg border px-4 py-2 text-center tracking-widest uppercase dark:bg-zinc-900 dark:border-zinc-700"
+                placeholder="CODE"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                maxLength={5}
+              />
+              <button
+                onClick={() => handleJoin(joinCode.trim().toUpperCase())}
+                disabled={busy}
+                className="rounded-full border px-4 py-2 font-medium disabled:opacity-50 dark:border-zinc-600"
+              >
+                Join
+              </button>
+            </div>
           </div>
         </div>
       </div>
