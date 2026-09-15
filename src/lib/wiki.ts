@@ -185,7 +185,7 @@ interface Section {
 // article content — so they're kept out of the TOC and moved into one
 // collapsed block at the end of the article instead of being removed
 // outright, in case a stuck player wants to dig through sources for a link.
-const EXTRA_SECTION_TITLES = ["References", "Further reading", "External links"];
+const EXTRA_SECTION_TITLES = ["Notes", "Bibliography", "References", "Further reading", "External links"];
 
 function excludeExtraSections(sections: Section[]): Section[] {
   const result: Section[] = [];
@@ -226,15 +226,21 @@ function buildTocHtml(sections: Section[]): string {
 }
 
 // A section's heading and its content are flat siblings in the parsed
-// output (no wrapping container per section), so "this section's content"
-// means "this heading plus everything after it up to the next top-level
-// heading" — collect and detach that whole run in one pass.
+// output, so "this section's content" means "this heading plus everything
+// after it up to the next top-level heading" — collect and detach that
+// whole run in one pass. Modern MediaWiki output wraps each `<h2 id=…>` in
+// its own `.mw-heading2` div (with the edit-section link as its only other
+// child, already stripped above) — operate on that wrapper, not the bare
+// `<h2>`, or `.next()` finds no sibling and the section extracts as an
+// empty heading.
 function extractSectionHtml($: ReturnType<typeof cheerio.load>, anchor: string): string {
-  const heading = $(`#${anchor}`);
-  if (heading.length === 0) return "";
+  const target = $(`#${anchor}`);
+  if (target.length === 0) return "";
+  const wrapper = target.closest(".mw-heading");
+  const heading = wrapper.length > 0 ? wrapper : target;
   const nodes = [heading];
   let sibling = heading.next();
-  while (sibling.length > 0 && sibling.get(0)?.tagName?.toLowerCase() !== "h2") {
+  while (sibling.length > 0 && !sibling.hasClass("mw-heading2")) {
     nodes.push(sibling);
     sibling = sibling.next();
   }
@@ -305,7 +311,7 @@ export async function fetchArticle(title: string): Promise<ParsedArticle | null>
     .filter(Boolean);
   if (extraParts.length > 0) {
     $.root().append(
-      `<div class="mw-collapsible mw-collapsed wiki-race-extra"><div class="wiki-race-extra-title">References, further reading &amp; external links</div><div class="mw-collapsible-content">${extraParts.join("")}</div></div>`
+      `<div class="mw-collapsible mw-collapsed wiki-race-extra"><div class="wiki-race-extra-title">Notes, references &amp; further reading</div><div class="mw-collapsible-content">${extraParts.join("")}</div></div>`
     );
   }
 
