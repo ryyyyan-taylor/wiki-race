@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSavedName, saveName, setIdentity } from "@/lib/identity";
+import type { OpenRoom } from "@/lib/types";
+
+const ROOM_LIST_POLL_MS = 5_000;
 
 export default function Home() {
   const router = useRouter();
   const [name, setName] = useState(getSavedName);
-  const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,14 +36,9 @@ export default function Home() {
     router.push(`/lobby/${data.roomCode}`);
   }
 
-  async function handleJoin() {
+  async function handleJoin(code: string) {
     if (!name.trim()) {
       setError("Enter your name first");
-      return;
-    }
-    const code = joinCode.trim().toUpperCase();
-    if (code.length !== 5) {
-      setError("Room codes are 5 characters");
       return;
     }
     setBusy(true);
@@ -87,23 +84,54 @@ export default function Home() {
           </div>
           <div className="rounded-xl border p-6 flex flex-col items-center gap-4 dark:border-zinc-700">
             <h2 className="text-xl font-semibold">Join</h2>
-            <input
-              className="w-full rounded-lg border px-4 py-2 text-center tracking-widest uppercase dark:bg-zinc-900 dark:border-zinc-700"
-              placeholder="CODE"
-              value={joinCode}
-              onChange={(e) => setJoinCode(e.target.value)}
-              maxLength={5}
-            />
-            <button
-              onClick={handleJoin}
-              disabled={busy}
-              className="w-full rounded-full border py-3 font-medium disabled:opacity-50 dark:border-zinc-600"
-            >
-              Join Room
-            </button>
+            <OpenRoomsList onJoin={handleJoin} busy={busy} />
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function OpenRoomsList({ onJoin, busy }: { onJoin: (code: string) => void; busy: boolean }) {
+  const [rooms, setRooms] = useState<OpenRoom[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const res = await fetch("/api/rooms");
+      if (cancelled || !res.ok) return;
+      const data = await res.json();
+      setRooms(data.rooms ?? []);
+    }
+    load();
+    const interval = setInterval(load, ROOM_LIST_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (rooms === null) {
+    return <p className="text-sm text-zinc-500">Loading rooms…</p>;
+  }
+  if (rooms.length === 0) {
+    return <p className="text-sm text-zinc-500">No open rooms right now</p>;
+  }
+
+  return (
+    <ul className="w-full max-h-56 overflow-y-auto divide-y rounded-lg border dark:border-zinc-700 dark:divide-zinc-700">
+      {rooms.map((room) => (
+        <li key={room.code}>
+          <button
+            onClick={() => onJoin(room.code)}
+            disabled={busy}
+            className="w-full flex items-center justify-between px-4 py-2 text-left hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
+          >
+            <span>{room.hostName}&apos;s Room</span>
+            <span className="text-sm text-zinc-500">{room.playerCount} players</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

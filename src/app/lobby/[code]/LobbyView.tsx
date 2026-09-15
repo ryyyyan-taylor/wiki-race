@@ -12,6 +12,8 @@ interface Props {
   roomCode: string;
 }
 
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
 // Picks and persists one field's random page server-side (see
 // /api/rooms/[code]/random-pages) — every viewer's `rooms` row subscription
 // then converges on the same value, rather than each client guessing its
@@ -91,6 +93,24 @@ export function LobbyView({ roomCode }: Props) {
   }, [roomCode]);
 
   useHostFailover(roomCode, players, identity);
+
+  // Keeps this player's `last_seen_at` fresh so the home page's open-room
+  // list (see GET /api/rooms) knows someone is actually still here — well
+  // under ROOM_STALE_MS there, so a missed beat or two doesn't drop the
+  // room from the list.
+  useEffect(() => {
+    if (!identity) return;
+    const beat = () => {
+      fetch(`/api/rooms/${roomCode}/heartbeat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId: identity.playerId, token: identity.token }),
+      });
+    };
+    beat();
+    const interval = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [roomCode, identity]);
 
   // Keeps the room's start/target pages populated with a random pick
   // whenever they're empty — on first load, and again if the host clears a

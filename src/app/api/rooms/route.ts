@@ -5,6 +5,46 @@ import { generateRoomCode } from "@/lib/room-code";
 import { DEFAULT_BANNED_PAGES } from "@/lib/wiki";
 import { withErrorHandling } from "@/lib/api-route";
 
+// A room only shows up as "open" once at least one of its players has
+// heartbeated within this window (see the interval in LobbyView) — wide
+// enough to absorb a missed beat or two, tight enough that a room nobody's
+// actually in disappears from the list quickly.
+const ROOM_STALE_MS = 45_000;
+
+export const GET = withErrorHandling(async () => {
+  const supabase = supabaseAdmin();
+  const { data: rooms } = await supabase
+    .from("rooms")
+    .select("code, created_at")
+    .eq("status", "lobby")
+    .order("created_at", { ascending: false });
+  if (!rooms || rooms.length === 0) return NextResponse.json({ rooms: [] });
+
+  const { data: players } = await supabase
+    .from("players")
+    .select("room_code, name, is_host, last_seen_at")
+    .in("room_code", rooms.map((r) => r.code));
+
+  const byRoom = new Map<string, { hostName: string | null; playerCount: number }>();
+  const staleBefore = Date.now() - ROOM_STALE_MS;
+  for (const p of players ?? []) {
+    const entry = byRoom.get(p.room_code) ?? { hostName: null, playerCount: 0 };
+    if (p.is_host) entry.hostName = p.name;
+    if (new Date(p.last_seen_at).getTime() >= staleBefore) entry.playerCount += 1;
+    byRoom.set(p.room_code, entry);
+  }
+
+  const openRooms: { code: string; hostName: string; playerCount: number }[] = [];
+  for (const room of rooms) {
+    const entry = byRoom.get(room.code);
+    if (entry?.hostName && entry.playerCount > 0) {
+      openRooms.push({ code: room.code, hostName: entry.hostName, playerCount: entry.playerCount });
+    }
+  }
+
+  return NextResponse.json({ rooms: openRooms });
+});
+
 export const POST = withErrorHandling(async (request: Request) => {
   const { name } = await request.json();
   if (typeof name !== "string" || !name.trim()) {

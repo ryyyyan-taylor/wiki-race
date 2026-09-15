@@ -18,6 +18,14 @@ export interface Room {
   bannedPages: string[];
 }
 
+// Returned by GET /api/rooms for the home page's open-room list — already
+// filtered to rooms with a heartbeating player.
+export interface OpenRoom {
+  code: string;
+  hostName: string;
+  playerCount: number;
+}
+
 // Raw Postgres row shapes, as delivered by postgres_changes payloads
 // (snake_case, matching the DB columns directly).
 export interface PlayerRow {
