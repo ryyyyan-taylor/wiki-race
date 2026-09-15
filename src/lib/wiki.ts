@@ -139,6 +139,25 @@ export async function getIntroSentences(title: string): Promise<string[]> {
   return splitSentences(extract);
 }
 
+// Backs the "Linked Page" hint — pages that link to the target (Wikipedia's
+// "what links here"), one revealed per call. `blnamespace=0` already keeps
+// this to article namespace, and excluding redirects keeps a hint from just
+// being the target itself under another name. Order comes back alphabetical
+// and stable across calls, so no shuffling/caching is needed for a
+// consistent one-per-call reveal.
+export async function getLinkedPages(title: string): Promise<string[]> {
+  const data = await wikiApi({
+    action: "query",
+    list: "backlinks",
+    bltitle: title,
+    blnamespace: "0",
+    bllimit: "500",
+    blfilterredir: "nonredirects",
+  });
+  const backlinks: { title: string }[] = data.query?.backlinks ?? [];
+  return backlinks.map((b) => b.title.replace(/ /g, "_"));
+}
+
 function articleTitleFromHref(href: string): string | null {
   if (!href.startsWith("/wiki/")) return null;
   const decoded = decodeURIComponent(href.slice("/wiki/".length));

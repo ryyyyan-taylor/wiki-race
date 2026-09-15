@@ -56,6 +56,7 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
       targetPage: latestRace.target_page,
       startedAt: latestRace.started_at,
       hintText: latestRace.hint_text,
+      linkedPageHints: latestRace.linked_page_hints ?? [],
       winnerPlayerId: latestRace.winner_player_id,
       winnerPath: latestRace.winner_path,
       players: (racePlayers ?? []).map((rp) => ({

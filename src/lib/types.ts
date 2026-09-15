@@ -47,6 +47,7 @@ export interface RaceRow {
   winner_player_id: string | null;
   winner_path: string[] | null;
   hint_text: string | null;
+  linked_page_hints: string[];
 }
 
 export interface RacePlayerRow {
@@ -67,6 +68,7 @@ export interface RaceSnapshot {
   targetPage: string;
   startedAt: string;
   hintText: string | null;
+  linkedPageHints: string[];
   winnerPlayerId: string | null;
   winnerPath: string[] | null;
   players: { playerId: string; status: RacePlayerStatus; pagesVisitedCount: number }[];

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { getIdentity } from "@/lib/identity";
 import { supabaseBrowser } from "@/lib/supabase/browser";
@@ -149,6 +149,12 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   // many sentences the intro actually has) — worst case, one extra click
   // after the last one available just confirms there's nothing more.
   const [hintHasMore, setHintHasMore] = useState(true);
+  const [linkedPageHints, setLinkedPageHints] = useState<string[]>([]);
+  // Same optimistic assumption as hintHasMore, until the server reports the
+  // actual number of pages that link to the target.
+  const [linkedPageHasMore, setLinkedPageHasMore] = useState(true);
+  const [hintMenuOpen, setHintMenuOpen] = useState(false);
+  const hintMenuRef = useRef<HTMLDivElement>(null);
   const [hasForfeited, setHasForfeited] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -222,6 +228,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         setRaceId(data.race.id);
         setStartedAt(data.race.startedAt);
         setHintText(data.race.hintText);
+        setLinkedPageHints(data.race.linkedPageHints ?? []);
         setOpponentProgress(
           Object.fromEntries(
             (data.race.players as { playerId: string; status: string; pagesVisitedCount: number }[])
@@ -267,6 +274,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
 
     const handleRaceChange = (row: RaceRow) => {
       if (row.hint_text) setHintText(row.hint_text);
+      if (row.linked_page_hints?.length) setLinkedPageHints(row.linked_page_hints);
       if (row.status === "finished" || row.status === "all_forfeited") {
         router.push(`/finish/${roomCode}`);
       }
@@ -326,6 +334,32 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
       setHintHasMore(Boolean(data.hasMore));
     }
   }, [roomCode, identity]);
+
+  const handleLinkedPageHint = useCallback(async () => {
+    const id = identity;
+    if (!id) return;
+    setBusy(true);
+    const res = await fetch(`/api/rooms/${roomCode}/hint/linked-page`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: id.playerId, token: id.token }),
+    });
+    const data = await res.json();
+    setBusy(false);
+    if (res.ok) {
+      setLinkedPageHints(data.pages);
+      setLinkedPageHasMore(Boolean(data.hasMore));
+    }
+  }, [roomCode, identity]);
+
+  useEffect(() => {
+    if (!hintMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (!hintMenuRef.current?.contains(e.target as Node)) setHintMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onClick);
+    return () => window.removeEventListener("mousedown", onClick);
+  }, [hintMenuOpen]);
 
   // Wired via the onLoad prop (rather than an effect + addEventListener) so
   // it's attached before the iframe element exists, with no window in which
@@ -413,14 +447,41 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         <div className="flex items-center gap-3">
           <span className="text-sm">Pages visited: {pagesVisited}</span>
           {isHost && (
-            <button
-              onClick={handleHint}
-              disabled={busy || !hintHasMore}
-              title={hintText ? "Reveal another sentence" : "Reveal a hint"}
-              className="rounded-full border px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-600"
-            >
-              💡 {hintText ? "More hint" : "Hint"}
-            </button>
+            <div className="relative" ref={hintMenuRef}>
+              <button
+                onClick={() => setHintMenuOpen((open) => !open)}
+                disabled={busy || (!hintHasMore && !linkedPageHasMore)}
+                className="rounded-full border px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-600"
+              >
+                💡 Hint ▾
+              </button>
+              {hintMenuOpen && (
+                <div className="absolute right-0 top-full mt-1 w-40 rounded border bg-white text-sm shadow-lg z-10 dark:bg-zinc-900 dark:border-zinc-600">
+                  <button
+                    onClick={() => {
+                      setHintMenuOpen(false);
+                      handleHint();
+                    }}
+                    disabled={busy || !hintHasMore}
+                    title={hintText ? "Reveal another sentence" : "Reveal a hint"}
+                    className="block w-full px-3 py-2 text-left disabled:opacity-50 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    Next Sentence
+                  </button>
+                  <button
+                    onClick={() => {
+                      setHintMenuOpen(false);
+                      handleLinkedPageHint();
+                    }}
+                    disabled={busy || !linkedPageHasMore}
+                    title={linkedPageHints.length ? "Reveal another linked page" : "Reveal a page that links to the target"}
+                    className="block w-full px-3 py-2 text-left disabled:opacity-50 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    Linked Page
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {!hasForfeited && (
             <button
@@ -448,6 +509,12 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
       {hintText && (
         <div className="bg-sky-100 text-sky-900 px-4 py-2 text-sm">
           <strong>Hint:</strong> {hintText}
+        </div>
+      )}
+
+      {linkedPageHints.length > 0 && (
+        <div className="bg-sky-100 text-sky-900 px-4 py-2 text-sm">
+          <strong>Links to target:</strong> {linkedPageHints.map(displayTitle).join(", ")}
         </div>
       )}
 
