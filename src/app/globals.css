@@ -24,3 +24,23 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* One-shot attention flash for the Forfeit button, replayed by remounting
+   the element on a changing `key` rather than toggling a class (which
+   wouldn't restart an already-finished animation for a second forfeit). */
+@keyframes wiki-race-forfeit-flash {
+  0%,
+  100% {
+    background-color: transparent;
+    border-color: inherit;
+  }
+  20%,
+  60% {
+    background-color: rgb(239 68 68 / 0.35);
+    border-color: rgb(239 68 68);
+  }
+}
+
+.wiki-race-forfeit-flash {
+  animation: wiki-race-forfeit-flash 1.6s ease-in-out;
+}

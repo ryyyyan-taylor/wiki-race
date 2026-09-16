@@ -157,12 +157,23 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   const hintMenuRef = useRef<HTMLDivElement>(null);
   const [hasForfeited, setHasForfeited] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Bumped on every *newly* forfeited opponent to replay the Forfeit
+  // button's attention flash (see handleRacePlayerChange) — mirrored
+  // outside React state so the "did this status just change" check doesn't
+  // depend on a stale closure over the previous render's opponentProgress.
+  const [forfeitFlashNonce, setForfeitFlashNonce] = useState(0);
+  const opponentStatusRef = useRef<Record<string, string>>({});
 
   const playerNames = useMemo(() => Object.fromEntries(players.map((p) => [p.id, p.name])), [players]);
   const isHost = useMemo(
     () => players.find((p) => p.id === identity?.playerId)?.isHost ?? false,
     [players, identity]
   );
+  // opponentProgress's keys are every other race participant, fixed once
+  // the race starts — no separate "total racers" fetch needed.
+  const totalRacers = Object.keys(opponentProgress).length + 1;
+  const forfeitedCount =
+    Object.values(opponentProgress).filter((p) => p.status === "forfeited").length + (hasForfeited ? 1 : 0);
 
   useHostFailover(roomCode, players, identity);
 
@@ -229,13 +240,13 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         setStartedAt(data.race.startedAt);
         setHintText(data.race.hintText);
         setLinkedPageHints(data.race.linkedPageHints ?? []);
+        const opponents = (
+          data.race.players as { playerId: string; status: string; pagesVisitedCount: number }[]
+        ).filter((rp) => rp.playerId !== id.playerId);
         setOpponentProgress(
-          Object.fromEntries(
-            (data.race.players as { playerId: string; status: string; pagesVisitedCount: number }[])
-              .filter((rp) => rp.playerId !== id.playerId)
-              .map((rp) => [rp.playerId, { status: rp.status, pagesVisitedCount: rp.pagesVisitedCount }])
-          )
+          Object.fromEntries(opponents.map((rp) => [rp.playerId, { status: rp.status, pagesVisitedCount: rp.pagesVisitedCount }]))
         );
+        opponentStatusRef.current = Object.fromEntries(opponents.map((rp) => [rp.playerId, rp.status]));
         const ownRacePlayer = (data.race.players as { playerId: string; status: string }[]).find(
           (rp) => rp.playerId === id.playerId
         );
@@ -282,6 +293,11 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
 
     const handleRacePlayerChange = (row: RacePlayerRow) => {
       if (row.player_id === ownId) return; // own count is authoritative from navigate()'s response
+      const previousStatus = opponentStatusRef.current[row.player_id];
+      opponentStatusRef.current[row.player_id] = row.status;
+      if (row.status === "forfeited" && previousStatus !== "forfeited") {
+        setForfeitFlashNonce((n) => n + 1);
+      }
       setOpponentProgress((prev) => ({
         ...prev,
         [row.player_id]: { status: row.status, pagesVisitedCount: row.pages_visited_count },
@@ -485,11 +501,14 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           )}
           {!hasForfeited && (
             <button
+              key={forfeitFlashNonce}
               onClick={handleForfeit}
               disabled={busy}
-              className="rounded-full border px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-600"
+              className={`rounded-full border px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-600 ${
+                forfeitFlashNonce > 0 ? "wiki-race-forfeit-flash" : ""
+              }`}
             >
-              Forfeit
+              Forfeit ({forfeitedCount}/{totalRacers})
             </button>
           )}
           <ThemeToggle />
