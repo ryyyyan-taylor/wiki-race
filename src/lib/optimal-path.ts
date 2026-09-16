@@ -33,7 +33,11 @@ interface Frontier {
 // Fetches `fetcher(title)` for each title with up to `concurrency` requests
 // in flight, but stops handing out new work once `deadlineAt` passes —
 // checked before every individual request, not just between batches, so a
-// slow level can't run long past the deadline.
+// slow level can't run long past the deadline. A single title's request
+// failing (a 429 that outlasts wikiApi's own retries, a network blip) is
+// treated as "no neighbors found there" rather than aborting the whole
+// search — with well over a hundred requests in a level, losing one must
+// not sink an otherwise-successful path.
 async function fetchNeighborsWithDeadline(
   titles: string[],
   fetcher: LinkFetcher,
@@ -46,7 +50,11 @@ async function fetchNeighborsWithDeadline(
     while (next < titles.length) {
       if (Date.now() > deadlineAt) return;
       const title = titles[next++];
-      result.set(title, await fetcher(title));
+      try {
+        result.set(title, await fetcher(title));
+      } catch {
+        result.set(title, []);
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, titles.length) }, worker));

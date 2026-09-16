@@ -62,4 +62,27 @@ describe("findShortestPath", () => {
     const path = await findShortestPath("A", "F", fetchers, { deadlineAt: Date.now() - 1 });
     expect(path).toBeNull();
   });
+
+  it("doesn't let one failed lookup in a batch sink the whole search", async () => {
+    // A live 429 that outlasts wikiApi's own retries throws — with a
+    // level's batch running well over a hundred requests concurrently, one
+    // bad title must not abort a search that a *different* title in the
+    // same batch would otherwise have completed (this is exactly what
+    // happened live: Bangladesh -> CNN -> Umberto Eco -> Semiotic literary
+    // criticism was found this way, but a single 429 among the batch used
+    // to throw and take the whole search down with it).
+    //
+    // A -> C, A -> X, X -> M -> F(target); F also has a decoy backlink so
+    // the backward frontier ties forward's ([C, X]) in size, which is what
+    // makes the search expand C and X together in one batch instead of
+    // resolving via the backward side alone before forward ever needs to.
+    const graph: Record<string, string[]> = { A: ["C", "X"], X: ["M"], M: ["F"] };
+    const backward: Record<string, string[]> = { F: ["M", "Decoy"], M: ["X"], X: ["A"], C: ["A"] };
+    const flakyForward: LinkFetcher = async (title) => {
+      if (title === "C") throw new Error("429");
+      return graph[title] ?? [];
+    };
+    const path = await findShortestPath("A", "F", { forward: flakyForward, backward: fetcherFor(backward) });
+    expect(path).toEqual(["A", "X", "M", "F"]);
+  });
 });
