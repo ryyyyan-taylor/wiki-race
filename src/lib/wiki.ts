@@ -158,6 +158,30 @@ export async function getLinkedPages(title: string): Promise<string[]> {
   return backlinks.map((b) => b.title.replace(/ /g, "_"));
 }
 
+// Forward/backward link lookups for the optimal-path search
+// (src/lib/optimal-path.ts). One title per call, deliberately not batched:
+// `pllimit`/`lhlimit` cap the whole response, not each title in a
+// multi-title query, so batching titles together silently starves every
+// title after the first one or two of their links instead of erroring.
+export async function getForwardLinks(title: string): Promise<string[]> {
+  const data = await wikiApi({ action: "query", titles: title, prop: "links", plnamespace: "0", pllimit: "500" });
+  const links: { title: string }[] = data.query?.pages?.[0]?.links ?? [];
+  return links.map((l) => l.title.replace(/ /g, "_"));
+}
+
+export async function getBackwardLinks(title: string): Promise<string[]> {
+  const data = await wikiApi({
+    action: "query",
+    titles: title,
+    prop: "linkshere",
+    lhnamespace: "0",
+    lhlimit: "500",
+    lhshow: "!redirect",
+  });
+  const links: { title: string }[] = data.query?.pages?.[0]?.linkshere ?? [];
+  return links.map((l) => l.title.replace(/ /g, "_"));
+}
+
 function articleTitleFromHref(href: string): string | null {
   if (!href.startsWith("/wiki/")) return null;
   const decoded = decodeURIComponent(href.slice("/wiki/".length));

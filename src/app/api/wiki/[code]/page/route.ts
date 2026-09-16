@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { authenticatePlayer } from "@/lib/auth";
 import { collapseToShortestPath } from "@/lib/shortest-path";
+import { computeOptimalPath } from "@/lib/optimal-path";
 import { fetchArticle } from "@/lib/wiki";
 import { withErrorHandling } from "@/lib/api-route";
 
@@ -140,6 +141,17 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     .eq("id", race.id);
   // Clients pick this up via their `races` row subscription; standings
   // come from the race_players stream they've already been accumulating.
+
+  // The optimal-path search can take several seconds — run it after the
+  // response goes out and let the finish page pick up the result via its
+  // `races` row subscription once it lands.
+  after(async () => {
+    const optimalPath = await computeOptimalPath(race.start_page, race.target_page);
+    await supabase
+      .from("races")
+      .update({ optimal_path: optimalPath ?? [] })
+      .eq("id", race.id);
+  });
 
   return NextResponse.json({
     status: "win",

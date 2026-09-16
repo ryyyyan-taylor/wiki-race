@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { authenticatePlayer } from "@/lib/auth";
+import { computeOptimalPath } from "@/lib/optimal-path";
 import { withErrorHandling } from "@/lib/api-route";
 
 export const POST = withErrorHandling(async (request: Request, { params }: { params: Promise<{ code: string }> }) => {
@@ -14,7 +15,7 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
 
   const { data: race } = await supabase
     .from("races")
-    .select("id")
+    .select("id, start_page, target_page")
     .eq("room_code", roomCode)
     .eq("status", "active")
     .order("started_at", { ascending: false })
@@ -45,6 +46,14 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
       .from("races")
       .update({ status: "all_forfeited", ended_at: new Date().toISOString() })
       .eq("id", race.id);
+
+    after(async () => {
+      const optimalPath = await computeOptimalPath(race.start_page, race.target_page);
+      await supabase
+        .from("races")
+        .update({ optimal_path: optimalPath ?? [] })
+        .eq("id", race.id);
+    });
   }
 
   return NextResponse.json({ ok: true });

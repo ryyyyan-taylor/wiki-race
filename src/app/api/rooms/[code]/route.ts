@@ -33,10 +33,30 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
     .maybeSingle();
 
   if (latestRace) {
-    const { data: racePlayers } = await supabase
+    const racePlayersQuery = supabase
       .from("race_players")
       .select("player_id, status, pages_visited_count, current_page")
       .eq("race_id", latestRace.id);
+
+    // Only needed once the race is over, for the finish page's per-player
+    // visited-pages dropdown — skip it while still racing.
+    const visitsQuery =
+      latestRace.status === "active"
+        ? null
+        : supabase
+            .from("visits")
+            .select("player_id, page_title")
+            .eq("race_id", latestRace.id)
+            .order("sequence_index", { ascending: true });
+
+    const [{ data: racePlayers }, visitsResult] = await Promise.all([racePlayersQuery, visitsQuery]);
+
+    const visitedPagesByPlayer = new Map<string, string[]>();
+    for (const visit of visitsResult?.data ?? []) {
+      const pages = visitedPagesByPlayer.get(visit.player_id) ?? [];
+      pages.push(visit.page_title);
+      visitedPagesByPlayer.set(visit.player_id, pages);
+    }
 
     let currentPage: string | null = null;
     const { searchParams } = new URL(request.url);
@@ -59,10 +79,12 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
       linkedPageHints: latestRace.linked_page_hints ?? [],
       winnerPlayerId: latestRace.winner_player_id,
       winnerPath: latestRace.winner_path,
+      optimalPath: latestRace.optimal_path,
       players: (racePlayers ?? []).map((rp) => ({
         playerId: rp.player_id,
         status: rp.status,
         pagesVisitedCount: rp.pages_visited_count,
+        visitedPages: visitedPagesByPlayer.get(rp.player_id) ?? [],
       })),
       currentPage,
     };

@@ -54,6 +54,7 @@ export interface RaceRow {
   started_at: string;
   winner_player_id: string | null;
   winner_path: string[] | null;
+  optimal_path: string[] | null;
   hint_text: string | null;
   linked_page_hints: string[];
 }
@@ -79,6 +80,14 @@ export interface RaceSnapshot {
   linkedPageHints: string[];
   winnerPlayerId: string | null;
   winnerPath: string[] | null;
-  players: { playerId: string; status: RacePlayerStatus; pagesVisitedCount: number }[];
+  // null = search still running in the background, [] = search gave up
+  // without finding a connecting path.
+  optimalPath: string[] | null;
+  players: {
+    playerId: string;
+    status: RacePlayerStatus;
+    pagesVisitedCount: number;
+    visitedPages: string[];
+  }[];
   currentPage: string | null;
 }
