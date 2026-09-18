@@ -142,15 +142,27 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   // Clients pick this up via their `races` row subscription; standings
   // come from the race_players stream they've already been accumulating.
 
-  // The optimal-path search can take several seconds — run it after the
-  // response goes out and let the finish page pick up the result via its
-  // `races` row subscription once it lands.
+  // For everyone still racing (i.e. not already forfeited — those got their
+  // distance computed when they forfeited), find how far they were from the
+  // finish from their last page. These searches can take several seconds —
+  // run them after the response goes out and let the finish page pick up
+  // each result via its `race_players` row subscription as it lands.
   after(async () => {
-    const optimalPath = await computeOptimalPath(race.start_page, race.target_page);
-    await supabase
-      .from("races")
-      .update({ optimal_path: optimalPath ?? [] })
-      .eq("id", race.id);
+    const { data: stillRacing } = await supabase
+      .from("race_players")
+      .select("player_id, current_page")
+      .eq("race_id", race.id)
+      .eq("status", "racing");
+    await Promise.all(
+      (stillRacing ?? []).map(async (rp) => {
+        const remainingPath = await computeOptimalPath(rp.current_page, race.target_page);
+        await supabase
+          .from("race_players")
+          .update({ remaining_path: remainingPath ?? [] })
+          .eq("race_id", race.id)
+          .eq("player_id", rp.player_id);
+      })
+    );
   });
 
   return NextResponse.json({

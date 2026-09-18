@@ -54,7 +54,6 @@ export interface RaceRow {
   started_at: string;
   winner_player_id: string | null;
   winner_path: string[] | null;
-  optimal_path: string[] | null;
   hint_text: string | null;
   linked_page_hints: string[];
 }
@@ -65,6 +64,10 @@ export interface RacePlayerRow {
   status: RacePlayerStatus;
   current_page: string;
   pages_visited_count: number;
+  // The shortest path found from this player's last visited page to the
+  // target, once they're out of the race. Null until computed (or forever,
+  // for the winner); [] means the search gave up without finding one.
+  remaining_path: string[] | null;
 }
 
 // The consolidated shape GET /api/rooms/[code] returns for the current (or
@@ -80,14 +83,15 @@ export interface RaceSnapshot {
   linkedPageHints: string[];
   winnerPlayerId: string | null;
   winnerPath: string[] | null;
-  // null = search still running in the background, [] = search gave up
-  // without finding a connecting path.
-  optimalPath: string[] | null;
   players: {
     playerId: string;
     status: RacePlayerStatus;
     pagesVisitedCount: number;
     visitedPages: string[];
+    // The shortest path found from this player's last visited page to the
+    // target. Null while the winner (never computed) or still running in
+    // the background; [] means the search gave up without finding one.
+    remainingPath: string[] | null;
   }[];
   currentPage: string | null;
 }
