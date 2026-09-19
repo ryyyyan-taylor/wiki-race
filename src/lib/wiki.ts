@@ -72,32 +72,42 @@ async function isDisambiguation(title: string): Promise<boolean> {
   return page?.pageprops?.disambiguation !== undefined;
 }
 
-async function pickRandomArticle(): Promise<string | null> {
+// A start page with no outbound links strands the racer immediately, and a
+// target page with no inbound links can never be reached from anywhere --
+// so require the role-appropriate link direction before handing back a
+// title, checked against the same link lists the optimal-path search
+// actually walks.
+async function pickRandomArticle(role: "start" | "target"): Promise<string | null> {
   const data = await wikiApi({ action: "query", list: "random", rnnamespace: "0", rnlimit: "1" });
   const title: string | undefined = data.query?.random?.[0]?.title;
   if (!title) return null;
   const canonical = await resolveCanonicalTitle(title);
   if (!canonical) return null;
-  return (await isDisambiguation(canonical)) ? null : canonical;
+  if (await isDisambiguation(canonical)) return null;
+  const links = role === "start" ? await getForwardLinks(canonical) : await getBackwardLinks(canonical);
+  return links.length > 0 ? canonical : null;
 }
 
-export async function pickRandomArticleTitle(): Promise<string> {
+export async function pickRandomArticleTitle(role: "start" | "target"): Promise<string> {
   for (let attempts = 0; attempts < 5; attempts++) {
-    const title = await pickRandomArticle();
+    const title = await pickRandomArticle(role);
     if (title) return title;
   }
   throw new Error("Could not pick a random article");
 }
 
 export async function pickRandomArticlePair(): Promise<{ startPage: string; targetPage: string }> {
-  const pages = new Set<string>();
-  for (let attempts = 0; attempts < 10 && pages.size < 2; attempts++) {
-    const title = await pickRandomArticle();
-    if (title) pages.add(title);
+  let startPage: string | null = null;
+  for (let attempts = 0; attempts < 5 && !startPage; attempts++) {
+    startPage = await pickRandomArticle("start");
   }
-  const [startPage, targetPage] = Array.from(pages);
-  if (!startPage || !targetPage) throw new Error("Could not pick two random articles");
-  return { startPage, targetPage };
+  if (!startPage) throw new Error("Could not pick a random start article");
+
+  for (let attempts = 0; attempts < 5; attempts++) {
+    const targetPage = await pickRandomArticle("target");
+    if (targetPage && targetPage !== startPage) return { startPage, targetPage };
+  }
+  throw new Error("Could not pick a random target article");
 }
 
 // Backs the lobby's search-as-you-type inputs (start/target/banned pages).

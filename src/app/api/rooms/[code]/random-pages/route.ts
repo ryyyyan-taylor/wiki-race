@@ -25,9 +25,9 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
 
   const otherPage = field === "start" ? room.target_page : room.start_page;
-  let title = await pickRandomArticleTitle();
+  let title = await pickRandomArticleTitle(field);
   for (let attempts = 0; attempts < 5 && title === otherPage; attempts++) {
-    title = await pickRandomArticleTitle();
+    title = await pickRandomArticleTitle(field);
   }
 
   const column = field === "start" ? "start_page" : "target_page";
