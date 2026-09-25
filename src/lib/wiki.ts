@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { pickVitalTitle } from "./vital-pages";
 
 const WIKI_API = "https://en.wikipedia.org/w/api.php";
 const WIKI_HEADERS = { "User-Agent": "wiki-race (personal project, non-commercial; https://github.com/ryyyyan-taylor/wiki-race)" };
@@ -57,8 +58,8 @@ async function wikiApi(params: Record<string, string>, revalidateSeconds?: numbe
 }
 
 // Redirects rarely change, so this is safe to cache — but never pass a
-// revalidate window to the `list=random`/disambiguation-check calls below,
-// which must stay uncached or "random" would always return the same page.
+// revalidate window to the disambiguation check below, which runs on a
+// freshly drawn candidate and must not be served a previous one's answer.
 export async function resolveCanonicalTitle(title: string): Promise<string | null> {
   const data = await wikiApi({ action: "query", titles: title, redirects: "1" }, 21600);
   const page = data.query?.pages?.[0];
@@ -72,16 +73,22 @@ async function isDisambiguation(title: string): Promise<boolean> {
   return page?.pageprops?.disambiguation !== undefined;
 }
 
-// A start page with no outbound links strands the racer immediately, and a
-// target page with no inbound links can never be reached from anywhere --
-// so require the role-appropriate link direction before handing back a
-// title, checked against the same link lists the optimal-path search
-// actually walks.
+// Candidates come from the topic-balanced vital-article pool rather than
+// Wikipedia's `list=random`. A uniform draw over all ~7M mainspace articles
+// is 27% people and 17% places -- mostly mass-created biography and village
+// stubs -- against under 1% each for science, mathematics and religion, which
+// made every race feel like the same two categories. See vital-pages.ts for
+// why the draw is topic-first.
+//
+// The guards below still earn their place even against a curated pool: a
+// title can be renamed, merged or turned into a disambiguation page between
+// regenerations of that pool. A start page with no outbound links strands
+// the racer immediately, and a target page with no inbound links can never
+// be reached from anywhere -- so require the role-appropriate link direction
+// before handing back a title, checked against the same link lists the
+// optimal-path search actually walks.
 async function pickRandomArticle(role: "start" | "target"): Promise<string | null> {
-  const data = await wikiApi({ action: "query", list: "random", rnnamespace: "0", rnlimit: "1" });
-  const title: string | undefined = data.query?.random?.[0]?.title;
-  if (!title) return null;
-  const canonical = await resolveCanonicalTitle(title);
+  const canonical = await resolveCanonicalTitle(pickVitalTitle());
   if (!canonical) return null;
   if (await isDisambiguation(canonical)) return null;
   const links = role === "start" ? await getForwardLinks(canonical) : await getBackwardLinks(canonical);
