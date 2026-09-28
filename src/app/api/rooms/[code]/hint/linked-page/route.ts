@@ -27,6 +27,9 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     supabase.from("rooms").select("banned_pages").eq("code", roomCode).maybeSingle(),
   ]);
   if (!race) return NextResponse.json({ error: "No active race" }, { status: 409 });
+  if (race.game_mode !== "race") {
+    return NextResponse.json({ error: "Hints aren't available in this game mode" }, { status: 409 });
+  }
 
   const bannedPages = new Set(room?.banned_pages ?? []);
   const candidates = (await getLinkedPages(race.target_page)).filter(

@@ -15,7 +15,7 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
 
   const { data: race } = await supabase
     .from("races")
-    .select("id, target_page")
+    .select("id, target_page, game_mode")
     .eq("room_code", roomCode)
     .eq("status", "active")
     .order("started_at", { ascending: false })
@@ -42,14 +42,17 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   // How far this player was from the finish, from where they gave up. Can
   // take a few seconds — run it after the response goes out and let the
   // finish page pick up the result via its `race_players` row subscription.
-  after(async () => {
-    const remainingPath = await computeOptimalPath(racePlayer.current_page, race.target_page);
-    await supabase
-      .from("race_players")
-      .update({ remaining_path: remainingPath ?? [] })
-      .eq("race_id", race.id)
-      .eq("player_id", playerId);
-  });
+  // No single target in bingo-family modes, so there's no distance to compute.
+  if (race.game_mode === "race") {
+    after(async () => {
+      const remainingPath = await computeOptimalPath(racePlayer.current_page, race.target_page!);
+      await supabase
+        .from("race_players")
+        .update({ remaining_path: remainingPath ?? [] })
+        .eq("race_id", race.id)
+        .eq("player_id", playerId);
+    });
+  }
 
   const { data: allRacePlayers } = await supabase.from("race_players").select("status").eq("race_id", race.id);
   const allForfeited = (allRacePlayers ?? []).every((rp) => rp.status === "forfeited");

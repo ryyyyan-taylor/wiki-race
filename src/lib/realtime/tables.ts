@@ -1,5 +1,5 @@
 import { supabaseBrowser } from "@/lib/supabase/browser";
-import type { Player, PlayerRow, RaceRow, RacePlayerRow, RoomRow } from "@/lib/types";
+import type { BingoClaimRow, Player, PlayerRow, RaceRow, RacePlayerRow, RoomRow } from "@/lib/types";
 
 export function subscribeRoomRow(roomCode: string, onChange: (room: RoomRow) => void) {
   const supabase = supabaseBrowser();
@@ -56,6 +56,19 @@ export function subscribeRace(
       "postgres_changes",
       { event: "UPDATE", schema: "public", table: "race_players", filter: `race_id=eq.${raceId}` },
       (payload) => onRacePlayerChange(payload.new as RacePlayerRow)
+    )
+    .subscribe();
+}
+
+// Claims are only ever inserted, never updated/deleted mid-race.
+export function subscribeBingoClaims(raceId: string, onClaim: (claim: BingoClaimRow) => void) {
+  const supabase = supabaseBrowser();
+  return supabase
+    .channel(`bingo:${raceId}`)
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "bingo_claims", filter: `race_id=eq.${raceId}` },
+      (payload) => onClaim(payload.new as BingoClaimRow)
     )
     .subscribe();
 }

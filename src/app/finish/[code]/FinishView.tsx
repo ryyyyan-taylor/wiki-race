@@ -9,6 +9,7 @@ import { useHostFailover } from "@/lib/realtime/presence";
 import { getServerThemeSnapshot, getThemeSnapshot, subscribeTheme } from "@/lib/theme";
 import { displayTitle } from "@/lib/format";
 import { buildArticleSrcDoc, DEFAULT_DETAILS_WIDTH, DEFAULT_TOC_WIDTH } from "@/lib/wiki-render";
+import { BingoBoard } from "@/components/BingoBoard";
 import type { Player, RacePlayerRow, RaceSnapshot, RoomRow } from "@/lib/types";
 
 interface Props {
@@ -135,8 +136,12 @@ export function FinishView({ roomCode, stylesheetHrefs }: Props) {
   // the `after()` callback before it writes back) would otherwise leave a
   // player's distance saying "calculating…" forever — degrade to "unknown"
   // instead once it's been too long.
+  // Bingo-family races never compute remaining_path — there's no single
+  // target to be "remaining" toward — so this stays permanently false there.
   const stillCalculatingRemainingPaths =
-    race?.players.some((p) => p.playerId !== race.winnerPlayerId && p.remainingPath === null) ?? false;
+    (race?.gameMode === "race" &&
+      race?.players.some((p) => p.playerId !== race.winnerPlayerId && p.remainingPath === null)) ??
+    false;
   const [remainingPathsTimedOut, setRemainingPathsTimedOut] = useState(false);
   useEffect(() => {
     if (!stillCalculatingRemainingPaths) return;
@@ -146,8 +151,9 @@ export function FinishView({ roomCode, stylesheetHrefs }: Props) {
 
   // The target article and its backlinks don't change once the race is
   // over — fetch them once, separately from the race/player data above.
+  // Bingo-family races have no single target, so there's nothing to fetch.
   useEffect(() => {
-    if (!raceId) return;
+    if (!raceId || race?.gameMode !== "race") return;
     fetch(`/api/wiki/${roomCode}/target`)
       .then((res) => res.json())
       .then((data) => {
@@ -155,6 +161,10 @@ export function FinishView({ roomCode, stylesheetHrefs }: Props) {
         setTargetArticle({ title: data.title, html: data.html, tocHtml: data.tocHtml, detailsHtml: data.detailsHtml });
         setTargetLinkedPages(data.linkedPages ?? []);
       });
+    // race.gameMode is set from the same fetch as raceId, so it's already
+    // current by the time this effect's guard reads it — omitted from deps
+    // to avoid re-fetching on unrelated race-state updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, raceId]);
 
   // Same click handling as the race page's article iframe (TOC jump links,
@@ -225,15 +235,31 @@ export function FinishView({ roomCode, stylesheetHrefs }: Props) {
         {race.winnerPlayerId ? (
           <>
             <h1 className="text-3xl font-bold">{playerName(race.winnerPlayerId)} won!</h1>
-            <p className="text-zinc-500 mt-2 text-sm">Shortest path ({(race.winnerPath ?? []).length})</p>
-            <p className="mt-1 font-mono text-sm max-w-lg">
-              {(race.winnerPath ?? []).map(displayTitle).join(" → ")}
-            </p>
+            {race.gameMode === "race" && (
+              <>
+                <p className="text-zinc-500 mt-2 text-sm">Shortest path ({(race.winnerPath ?? []).length})</p>
+                <p className="mt-1 font-mono text-sm max-w-lg">
+                  {(race.winnerPath ?? []).map(displayTitle).join(" → ")}
+                </p>
+              </>
+            )}
           </>
         ) : (
           <h1 className="text-3xl font-bold">Everyone forfeited</h1>
         )}
       </div>
+
+      {race.gameMode !== "race" && race.boardSize && race.boardPages && (
+        <div className="w-full max-w-md">
+          <BingoBoard
+            boardSize={race.boardSize}
+            boardPages={race.boardPages}
+            claims={race.claims}
+            players={race.players.map((p) => ({ id: p.playerId, color: p.color }))}
+            draggable={false}
+          />
+        </div>
+      )}
 
       <div className="w-full max-w-5xl">
         <h2 className="font-semibold mb-2">Results</h2>
@@ -250,7 +276,9 @@ export function FinishView({ roomCode, stylesheetHrefs }: Props) {
                       <span className="font-medium">{playerName(rp.playerId)}</span>
                       <div className="text-zinc-500 text-xs mt-0.5">
                         {rp.pagesVisitedCount} pages — {statusLabel(rp.status, isWinner)}
-                        {!isWinner ? ` — ${remainingPathLabel(rp.remainingPath, remainingPathsTimedOut)}` : ""}
+                        {!isWinner && race.gameMode === "race"
+                          ? ` — ${remainingPathLabel(rp.remainingPath, remainingPathsTimedOut)}`
+                          : ""}
                       </div>
                     </summary>
                     <ol className="mt-2 ml-4 max-h-64 overflow-y-auto list-decimal space-y-0.5 font-mono text-xs text-zinc-500">
@@ -284,46 +312,50 @@ export function FinishView({ roomCode, stylesheetHrefs }: Props) {
         <p className="text-zinc-500 text-sm">Waiting for the host to return everyone to the lobby…</p>
       )}
 
-      <hr className="w-full max-w-5xl border-zinc-200 dark:border-zinc-800" />
+      {race.gameMode === "race" && (
+        <>
+          <hr className="w-full max-w-5xl border-zinc-200 dark:border-zinc-800" />
 
-      <div className="w-full max-w-5xl">
-        <h2 className="font-semibold mb-2">Pages that linked here</h2>
-        {targetLinkedPages === null ? (
-          <p className="text-sm text-zinc-400 italic">Loading…</p>
-        ) : targetLinkedPages.length === 0 ? (
-          <p className="text-sm text-zinc-400 italic">No pages link to the target.</p>
-        ) : (
-          <div className="max-h-48 overflow-y-auto rounded-lg border p-3 dark:border-zinc-700">
-            <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
-              {targetLinkedPages.map((title) => (
-                <span key={title}>{displayTitle(title)}</span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="w-full max-w-5xl">
-        {targetArticle ? (
-          <iframe
-            onLoad={handleTargetIframeLoad}
-            srcDoc={buildArticleSrcDoc(
-              stylesheetHrefs,
-              displayTitle(targetArticle.title),
-              targetArticle.html,
-              targetArticle.tocHtml,
-              targetArticle.detailsHtml,
-              isDark,
-              DEFAULT_TOC_WIDTH,
-              DEFAULT_DETAILS_WIDTH
+          <div className="w-full max-w-5xl">
+            <h2 className="font-semibold mb-2">Pages that linked here</h2>
+            {targetLinkedPages === null ? (
+              <p className="text-sm text-zinc-400 italic">Loading…</p>
+            ) : targetLinkedPages.length === 0 ? (
+              <p className="text-sm text-zinc-400 italic">No pages link to the target.</p>
+            ) : (
+              <div className="max-h-48 overflow-y-auto rounded-lg border p-3 dark:border-zinc-700">
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+                  {targetLinkedPages.map((title) => (
+                    <span key={title}>{displayTitle(title)}</span>
+                  ))}
+                </div>
+              </div>
             )}
-            title="Target Wikipedia article"
-            className="w-full border-0 bg-white"
-          />
-        ) : (
-          <p className="text-sm text-zinc-400 italic">Loading target page…</p>
-        )}
-      </div>
+          </div>
+
+          <div className="w-full max-w-5xl">
+            {targetArticle ? (
+              <iframe
+                onLoad={handleTargetIframeLoad}
+                srcDoc={buildArticleSrcDoc(
+                  stylesheetHrefs,
+                  displayTitle(targetArticle.title),
+                  targetArticle.html,
+                  targetArticle.tocHtml,
+                  targetArticle.detailsHtml,
+                  isDark,
+                  DEFAULT_TOC_WIDTH,
+                  DEFAULT_DETAILS_WIDTH
+                )}
+                title="Target Wikipedia article"
+                className="w-full border-0 bg-white"
+              />
+            ) : (
+              <p className="text-sm text-zinc-400 italic">Loading target page…</p>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useRouter } from "next/navigation";
 import { getIdentity } from "@/lib/identity";
 import { supabaseBrowser } from "@/lib/supabase/browser";
-import { subscribePlayersTable, subscribeRace, upsertPlayer } from "@/lib/realtime/tables";
+import { subscribeBingoClaims, subscribePlayersTable, subscribeRace, upsertPlayer } from "@/lib/realtime/tables";
 import { useHostFailover } from "@/lib/realtime/presence";
 import { getServerThemeSnapshot, getThemeSnapshot, subscribeTheme } from "@/lib/theme";
 import { displayTitle } from "@/lib/format";
 import { buildArticleSrcDoc, DEFAULT_DETAILS_WIDTH, DEFAULT_TOC_WIDTH } from "@/lib/wiki-render";
-import type { Player, RaceRow, RacePlayerRow } from "@/lib/types";
+import type { BingoClaim, BingoClaimRow, GameMode, Player, RaceRow, RacePlayerRow } from "@/lib/types";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { BingoBoard } from "@/components/BingoBoard";
 
 interface Props {
   roomCode: string;
@@ -51,6 +52,11 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   // rule; a plain object read the same way doesn't.)
   const [columnWidths] = useState(() => ({ toc: DEFAULT_TOC_WIDTH, details: DEFAULT_DETAILS_WIDTH }));
   const [targetPage, setTargetPage] = useState<string | null>(null);
+  const [gameMode, setGameMode] = useState<GameMode>("race");
+  const [boardSize, setBoardSize] = useState<number | null>(null);
+  const [boardPages, setBoardPages] = useState<string[] | null>(null);
+  const [claims, setClaims] = useState<BingoClaim[]>([]);
+  const [playerColors, setPlayerColors] = useState<Record<string, string | null>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [raceId, setRaceId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<string | null>(null);
@@ -153,9 +159,18 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         setStartedAt(data.race.startedAt);
         setHintText(data.race.hintText);
         setLinkedPageHints(data.race.linkedPageHints ?? []);
+        setGameMode(data.race.gameMode);
+        setBoardSize(data.race.boardSize);
+        setBoardPages(data.race.boardPages);
+        setClaims(data.race.claims ?? []);
         const opponents = (
-          data.race.players as { playerId: string; status: string; pagesVisitedCount: number }[]
+          data.race.players as { playerId: string; status: string; pagesVisitedCount: number; color: string | null }[]
         ).filter((rp) => rp.playerId !== id.playerId);
+        setPlayerColors(
+          Object.fromEntries(
+            (data.race.players as { playerId: string; color: string | null }[]).map((rp) => [rp.playerId, rp.color])
+          )
+        );
         setOpponentProgress(
           Object.fromEntries(opponents.map((rp) => [rp.playerId, { status: rp.status, pagesVisitedCount: rp.pagesVisitedCount }]))
         );
@@ -233,6 +248,31 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
       channel.unsubscribe();
     };
   }, [raceId, roomCode, router, identity?.playerId]);
+
+  useEffect(() => {
+    if (!raceId || gameMode === "race") return;
+    const applyClaim = (row: BingoClaimRow) => {
+      if (row.race_id !== raceId) return;
+      setClaims((prev) =>
+        prev.some((c) => c.squareIndex === row.square_index && c.playerId === row.player_id)
+          ? prev
+          : [...prev, { squareIndex: row.square_index, playerId: row.player_id, pageTitle: row.page_title }]
+      );
+    };
+    const channel = subscribeBingoClaims(raceId, applyClaim);
+    // Closes the same mount-to-subscribe gap as the races/race_players
+    // subscription above.
+    supabaseBrowser()
+      .from("bingo_claims")
+      .select("*")
+      .eq("race_id", raceId)
+      .then(({ data }) => {
+        for (const row of (data ?? []) as BingoClaimRow[]) applyClaim(row);
+      });
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [raceId, gameMode]);
 
   const handleForfeit = useCallback(async () => {
     const id = identity;
@@ -369,13 +409,15 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
       <div className="flex items-center justify-between border-b px-4 py-2 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-800">
         <div className="flex items-center gap-4 text-sm">
           <span className="font-mono">{formatElapsed(elapsedMs)}</span>
-          <span>
-            Target: <strong>{targetPage ? displayTitle(targetPage) : "…"}</strong>
-          </span>
+          {gameMode === "race" && (
+            <span>
+              Target: <strong>{targetPage ? displayTitle(targetPage) : "…"}</strong>
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm">Pages visited: {pagesVisited}</span>
-          {isHost && (
+          {isHost && gameMode === "race" && (
             <div className="relative" ref={hintMenuRef}>
               <button
                 onClick={() => setHintMenuOpen((open) => !open)}
@@ -473,6 +515,15 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         title="Wikipedia article"
         className={`flex-1 w-full border-0 bg-white ${hasForfeited ? "pointer-events-none opacity-60" : ""}`}
       />
+
+      {gameMode !== "race" && boardSize && boardPages && (
+        <BingoBoard
+          boardSize={boardSize}
+          boardPages={boardPages}
+          claims={claims}
+          players={Object.entries(playerColors).map(([id, color]) => ({ id, color }))}
+        />
+      )}
     </div>
   );
 }

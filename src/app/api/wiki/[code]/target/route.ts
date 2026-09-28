@@ -19,6 +19,7 @@ export const GET = withErrorHandling(async (_request: Request, { params }: { par
     .limit(1)
     .maybeSingle();
   if (!race) return NextResponse.json({ error: "No race found" }, { status: 404 });
+  if (!race.target_page) return NextResponse.json({ error: "No target page for this race" }, { status: 404 });
 
   const [article, linkedPages] = await Promise.all([
     fetchArticle(race.target_page),

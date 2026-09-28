@@ -35,7 +35,7 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
   if (latestRace) {
     const racePlayersQuery = supabase
       .from("race_players")
-      .select("player_id, status, pages_visited_count, current_page, remaining_path")
+      .select("player_id, status, pages_visited_count, current_page, remaining_path, color")
       .eq("race_id", latestRace.id);
 
     // Only needed once the race is over, for the finish page's per-player
@@ -49,7 +49,17 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
             .eq("race_id", latestRace.id)
             .order("sequence_index", { ascending: true });
 
-    const [{ data: racePlayers }, visitsResult] = await Promise.all([racePlayersQuery, visitsQuery]);
+    // Bingo-family only; a 'race' race has no claims, so this stays empty.
+    const claimsQuery =
+      latestRace.game_mode === "race"
+        ? null
+        : supabase.from("bingo_claims").select("square_index, player_id, page_title").eq("race_id", latestRace.id);
+
+    const [{ data: racePlayers }, visitsResult, claimsResult] = await Promise.all([
+      racePlayersQuery,
+      visitsQuery,
+      claimsQuery,
+    ]);
 
     const visitedPagesByPlayer = new Map<string, string[]>();
     for (const visit of visitsResult?.data ?? []) {
@@ -79,12 +89,21 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
       linkedPageHints: latestRace.linked_page_hints ?? [],
       winnerPlayerId: latestRace.winner_player_id,
       winnerPath: latestRace.winner_path,
+      gameMode: latestRace.game_mode,
+      boardSize: latestRace.board_size,
+      boardPages: latestRace.board_pages,
+      claims: (claimsResult?.data ?? []).map((c) => ({
+        squareIndex: c.square_index,
+        playerId: c.player_id,
+        pageTitle: c.page_title,
+      })),
       players: (racePlayers ?? []).map((rp) => ({
         playerId: rp.player_id,
         status: rp.status,
         pagesVisitedCount: rp.pages_visited_count,
         visitedPages: visitedPagesByPlayer.get(rp.player_id) ?? [],
         remainingPath: rp.remaining_path,
+        color: rp.color,
       })),
       currentPage,
     };
@@ -97,6 +116,8 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
       startPage: room.start_page,
       targetPage: room.target_page,
       bannedPages: room.banned_pages,
+      gameMode: room.game_mode,
+      boardSize: room.board_size,
     },
     players: (players ?? []).map((p) => ({
       id: p.id,

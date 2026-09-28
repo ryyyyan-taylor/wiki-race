@@ -6,7 +6,15 @@ import { getSavedName, saveName, setIdentity, useIdentity, type Identity } from 
 import { subscribeRoomRow, subscribePlayersTable, upsertPlayer } from "@/lib/realtime/tables";
 import { useHostFailover } from "@/lib/realtime/presence";
 import { displayTitle } from "@/lib/format";
-import type { Player, Room, RoomRow } from "@/lib/types";
+import { VITAL_TOPICS, type VitalTopic } from "@/lib/vital-topics";
+import type { GameMode, Player, Room, RoomRow } from "@/lib/types";
+
+const GAME_MODE_LABELS: Record<GameMode, string> = {
+  race: "Classic Race",
+  bingo: "Bingo",
+  double_bingo: "Double Bingo",
+  lockout: "Lockout",
+};
 
 interface Props {
   roomCode: string;
@@ -19,12 +27,13 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 // then converges on the same value, rather than each client guessing its
 // own via a separate API call. Returns the picked title so a caller that
 // wants immediate feedback (the dice button) doesn't have to wait on the
-// subscription round-trip; null on failure.
-async function requestRandomPage(roomCode: string, identity: Identity, field: "start" | "target") {
+// subscription round-trip; null on failure. `topic`, when given, pins the
+// draw to that vital-article topic instead of a uniformly random one.
+async function requestRandomPage(roomCode: string, identity: Identity, field: "start" | "target", topic?: VitalTopic) {
   const res = await fetch(`/api/rooms/${roomCode}/random-pages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ playerId: identity.playerId, token: identity.token, field }),
+    body: JSON.stringify({ playerId: identity.playerId, token: identity.token, field, topic }),
   });
   if (!res.ok) return null;
   const data = await res.json();
@@ -72,6 +81,8 @@ export function LobbyView({ roomCode }: Props) {
         startPage: row.start_page,
         targetPage: row.target_page,
         bannedPages: row.banned_pages,
+        gameMode: row.game_mode,
+        boardSize: row.board_size,
       });
       if (row.status === "racing" && lastStatus.current !== "racing") {
         router.push(`/race/${roomCode}`);
@@ -377,11 +388,42 @@ function RulesPanel({
   const [optimisticStart, setOptimisticStart] = useState<string | null>(null);
   const [optimisticTarget, setOptimisticTarget] = useState<string | null>(null);
   const [optimisticBannedPages, setOptimisticBannedPages] = useState<string[] | null>(null);
+  const [optimisticGameMode, setOptimisticGameMode] = useState<GameMode | null>(null);
+  const [optimisticBoardSize, setOptimisticBoardSize] = useState<number | null>(null);
   const [rerollingStart, setRerollingStart] = useState(false);
   const [rerollingTarget, setRerollingTarget] = useState(false);
+  // "" means Random (no topic pin) — matches the <select>'s "Random" option.
+  const [targetTopic, setTargetTopic] = useState<VitalTopic | "">("");
   const displayStartPage = optimisticStart ?? room.startPage;
   const displayTargetPage = optimisticTarget ?? room.targetPage;
   const bannedPages = optimisticBannedPages ?? room.bannedPages ?? [];
+  const gameMode = optimisticGameMode ?? room.gameMode;
+  const boardSize = optimisticBoardSize ?? room.boardSize ?? 4;
+
+  async function saveGameMode(nextMode: GameMode) {
+    setOptimisticGameMode(nextMode);
+    await fetch(`/api/rooms/${roomCode}/rules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        playerId: identity.playerId,
+        token: identity.token,
+        gameMode: nextMode,
+        // Seeds a default the first time a bingo-family mode is picked —
+        // room.boardSize starts null, and the start route needs one set.
+        ...(nextMode !== "race" && !room.boardSize ? { boardSize: 4 } : {}),
+      }),
+    });
+  }
+
+  async function saveBoardSize(nextSize: number) {
+    setOptimisticBoardSize(nextSize);
+    await fetch(`/api/rooms/${roomCode}/rules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: identity.playerId, token: identity.token, boardSize: nextSize }),
+    });
+  }
 
   async function handleRerollStart() {
     setRerollingStart(true);
@@ -395,7 +437,7 @@ function RulesPanel({
 
   async function handleRerollTarget() {
     setRerollingTarget(true);
-    const title = await requestRandomPage(roomCode, identity, "target");
+    const title = await requestRandomPage(roomCode, identity, "target", targetTopic || undefined);
     if (title) {
       setOptimisticTarget(title);
       onManualReroll("target");
@@ -465,11 +507,20 @@ function RulesPanel({
       <div className="w-full max-w-md rounded-lg border p-4 flex flex-col gap-3 dark:border-zinc-700">
         <h2 className="font-semibold">Rules</h2>
         <p className="text-sm">
-          Start page: <strong>{room.startPage ? displayTitle(room.startPage) : "Random"}</strong>
+          Mode:{" "}
+          <strong>
+            {GAME_MODE_LABELS[room.gameMode]}
+            {room.gameMode !== "race" && room.boardSize ? ` (${room.boardSize}x${room.boardSize})` : ""}
+          </strong>
         </p>
         <p className="text-sm">
-          Target page: <strong>{room.targetPage ? displayTitle(room.targetPage) : "Random"}</strong>
+          Start page: <strong>{room.startPage ? displayTitle(room.startPage) : "Random"}</strong>
         </p>
+        {room.gameMode === "race" && (
+          <p className="text-sm">
+            Target page: <strong>{room.targetPage ? displayTitle(room.targetPage) : "Random"}</strong>
+          </p>
+        )}
         {bannedPages.length > 0 && (
           <div className="text-sm flex flex-col gap-1">
             Banned pages
@@ -489,6 +540,36 @@ function RulesPanel({
   return (
     <div className="w-full max-w-md rounded-lg border p-4 flex flex-col gap-3 dark:border-zinc-700">
       <h2 className="font-semibold">Rules (host only)</h2>
+      <label className="text-sm flex flex-col gap-1">
+        Mode
+        <select
+          value={gameMode}
+          onChange={(e) => saveGameMode(e.target.value as GameMode)}
+          className="rounded border px-2 py-2 dark:bg-zinc-900 dark:border-zinc-700"
+        >
+          {(Object.keys(GAME_MODE_LABELS) as GameMode[]).map((mode) => (
+            <option key={mode} value={mode}>
+              {GAME_MODE_LABELS[mode]}
+            </option>
+          ))}
+        </select>
+      </label>
+      {gameMode !== "race" && (
+        <label className="text-sm flex flex-col gap-1">
+          Board size
+          <select
+            value={boardSize}
+            onChange={(e) => saveBoardSize(Number(e.target.value))}
+            className="rounded border px-2 py-2 dark:bg-zinc-900 dark:border-zinc-700"
+          >
+            {[3, 4, 5].map((size) => (
+              <option key={size} value={size}>
+                {size}x{size}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="text-sm flex flex-col gap-1">
         Start page (leave blank for random)
         <div className="flex gap-2">
@@ -510,27 +591,43 @@ function RulesPanel({
           </button>
         </div>
       </label>
-      <label className="text-sm flex flex-col gap-1">
-        Target page (leave blank for random)
-        <div className="flex gap-2">
-          <WikiSearchInput
-            value={targetPage}
-            onChange={setTargetPage}
-            onSelect={setTargetPage}
-            placeholder={displayTargetPage ? displayTitle(displayTargetPage) : "Random"}
-          />
-          <button
-            type="button"
-            onClick={handleRerollTarget}
-            disabled={targetPage.trim().length > 0 || rerollingTarget}
-            title={targetPage.trim() ? "Clear the field to use a random page" : "Re-roll random target page"}
-            aria-label="Re-roll random target page"
-            className="rounded border px-3 py-2 disabled:opacity-30 dark:border-zinc-700"
-          >
-            🎲
-          </button>
-        </div>
-      </label>
+      {gameMode === "race" && (
+        <label className="text-sm flex flex-col gap-1">
+          Target page (leave blank for random)
+          <div className="flex gap-2">
+            <WikiSearchInput
+              value={targetPage}
+              onChange={setTargetPage}
+              onSelect={setTargetPage}
+              placeholder={displayTargetPage ? displayTitle(displayTargetPage) : "Random"}
+            />
+            <select
+              value={targetTopic}
+              onChange={(e) => setTargetTopic(e.target.value as VitalTopic | "")}
+              disabled={targetPage.trim().length > 0}
+              aria-label="Random target page category"
+              className="rounded border px-2 py-2 dark:bg-zinc-900 dark:border-zinc-700 disabled:opacity-30"
+            >
+              <option value="">Random</option>
+              {VITAL_TOPICS.map((topic) => (
+                <option key={topic} value={topic}>
+                  {topic}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={handleRerollTarget}
+              disabled={targetPage.trim().length > 0 || rerollingTarget}
+              title={targetPage.trim() ? "Clear the field to use a random page" : "Re-roll random target page"}
+              aria-label="Re-roll random target page"
+              className="rounded border px-3 py-2 disabled:opacity-30 dark:border-zinc-700"
+            >
+              🎲
+            </button>
+          </div>
+        </label>
+      )}
       <div className="text-sm flex flex-col gap-1">
         Banned pages
         <div className="flex gap-2">

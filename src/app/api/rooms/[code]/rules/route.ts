@@ -7,7 +7,7 @@ import { withErrorHandling } from "@/lib/api-route";
 export const POST = withErrorHandling(async (request: Request, { params }: { params: Promise<{ code: string }> }) => {
   const { code } = await params;
   const roomCode = code.toUpperCase();
-  const { playerId, token, startPage, targetPage, bannedPages } = await request.json();
+  const { playerId, token, startPage, targetPage, bannedPages, gameMode, boardSize } = await request.json();
 
   const supabase = supabaseAdmin();
   const player = await authenticatePlayer(supabase, roomCode, playerId, token);
@@ -16,6 +16,18 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   }
 
   const update: Record<string, unknown> = {};
+  if (gameMode !== undefined) {
+    if (!["race", "bingo", "double_bingo", "lockout"].includes(gameMode)) {
+      return NextResponse.json({ error: "Invalid game mode" }, { status: 400 });
+    }
+    update.game_mode = gameMode;
+  }
+  if (boardSize !== undefined) {
+    if (boardSize !== null && ![3, 4, 5].includes(boardSize)) {
+      return NextResponse.json({ error: "Invalid board size" }, { status: 400 });
+    }
+    update.board_size = boardSize;
+  }
   if (startPage !== undefined) {
     update.start_page = startPage ? await resolveCanonicalTitle(startPage) : null;
     if (startPage && !update.start_page) {

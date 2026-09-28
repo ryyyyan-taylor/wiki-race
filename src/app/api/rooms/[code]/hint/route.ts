@@ -24,6 +24,9 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     .limit(1)
     .maybeSingle();
   if (!race) return NextResponse.json({ error: "No active race" }, { status: 409 });
+  if (race.game_mode !== "race") {
+    return NextResponse.json({ error: "Hints aren't available in this game mode" }, { status: 409 });
+  }
 
   const sentences = await getIntroSentences(race.target_page);
   if (sentences.length === 0) {
