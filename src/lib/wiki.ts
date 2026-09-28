@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { pickVitalTitle } from "./vital-pages";
+import type { VitalTopic } from "./vital-topics";
 
 const WIKI_API = "https://en.wikipedia.org/w/api.php";
 const WIKI_HEADERS = { "User-Agent": "wiki-race (personal project, non-commercial; https://github.com/ryyyyan-taylor/wiki-race)" };
@@ -87,17 +88,17 @@ async function isDisambiguation(title: string): Promise<boolean> {
 // be reached from anywhere -- so require the role-appropriate link direction
 // before handing back a title, checked against the same link lists the
 // optimal-path search actually walks.
-async function pickRandomArticle(role: "start" | "target"): Promise<string | null> {
-  const canonical = await resolveCanonicalTitle(pickVitalTitle());
+async function pickRandomArticle(role: "start" | "target", topic?: VitalTopic): Promise<string | null> {
+  const canonical = await resolveCanonicalTitle(pickVitalTitle(Math.random, topic));
   if (!canonical) return null;
   if (await isDisambiguation(canonical)) return null;
   const links = role === "start" ? await getForwardLinks(canonical) : await getBackwardLinks(canonical);
   return links.length > 0 ? canonical : null;
 }
 
-export async function pickRandomArticleTitle(role: "start" | "target"): Promise<string> {
+export async function pickRandomArticleTitle(role: "start" | "target", topic?: VitalTopic): Promise<string> {
   for (let attempts = 0; attempts < 5; attempts++) {
-    const title = await pickRandomArticle(role);
+    const title = await pickRandomArticle(role, topic);
     if (title) return title;
   }
   throw new Error("Could not pick a random article");

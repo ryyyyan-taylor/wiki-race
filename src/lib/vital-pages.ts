@@ -1,24 +1,7 @@
 import pool from "./vital-pages.json";
+import { VITAL_TOPICS, type VitalTopic } from "./vital-topics";
 
-// Wikipedia's own topic split for its vital-article lists. Listed
-// explicitly rather than read off the JSON's keys so the uniform draw below
-// is over a fixed set -- a topic vanishing from a regenerated pool should
-// break loudly here, not silently reweight every other topic.
-export const VITAL_TOPICS = [
-  "Arts",
-  "Biology and health sciences",
-  "Everyday life",
-  "Geography",
-  "History",
-  "Mathematics",
-  "People",
-  "Philosophy and religion",
-  "Physical sciences",
-  "Society and social sciences",
-  "Technology",
-] as const;
-
-export type VitalTopic = (typeof VITAL_TOPICS)[number];
+export { VITAL_TOPICS, type VitalTopic };
 
 const titlesByTopic: Record<VitalTopic, string[]> = pool;
 
@@ -32,10 +15,13 @@ export function vitalTitles(topic: VitalTopic): string[] {
 // articles are biographies. Topic-first gives each of the 11 topics ~9%,
 // which is what makes a math concept or a religion as likely as a person.
 //
-// `rng` is injectable so the distribution itself can be asserted in tests
-// without any randomness, matching how optimal-path.ts takes a LinkFetcher.
-export function pickVitalTitle(rng: () => number = Math.random): string {
-  const topic = VITAL_TOPICS[Math.floor(rng() * VITAL_TOPICS.length)];
-  const titles = titlesByTopic[topic];
+// A caller-supplied `topic` skips the topic draw and pins it, for a
+// category-scoped random pick; otherwise the topic is drawn uniformly as
+// before. `rng` is injectable so the distribution itself can be asserted in
+// tests without any randomness, matching how optimal-path.ts takes a
+// LinkFetcher.
+export function pickVitalTitle(rng: () => number = Math.random, topic?: VitalTopic): string {
+  const chosenTopic = topic ?? VITAL_TOPICS[Math.floor(rng() * VITAL_TOPICS.length)];
+  const titles = titlesByTopic[chosenTopic];
   return titles[Math.floor(rng() * titles.length)];
 }
