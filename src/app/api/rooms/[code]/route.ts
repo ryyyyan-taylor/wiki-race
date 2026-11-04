@@ -35,7 +35,7 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
   if (latestRace) {
     const racePlayersQuery = supabase
       .from("race_players")
-      .select("player_id, status, pages_visited_count, current_page, remaining_path, color")
+      .select("player_id, status, pages_visited_count, current_page, remaining_path, color, forfeit_vote")
       .eq("race_id", latestRace.id);
 
     // Only needed once the race is over, for the finish page's per-player
@@ -105,6 +105,7 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
         visitedPages: visitedPagesByPlayer.get(rp.player_id) ?? [],
         remainingPath: rp.remaining_path,
         color: rp.color,
+        forfeitVote: rp.forfeit_vote,
       })),
       currentPage,
     };

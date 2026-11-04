@@ -89,6 +89,7 @@ export interface RacePlayerRow {
   // Assigned at race start for bingo-family races (from BINGO_PALETTE);
   // null for classic 'race' mode, which has no per-player board presence.
   color: string | null;
+  forfeit_vote: boolean;
 }
 
 // One player's claim on one board square, in a bingo-family race. Shared
@@ -141,6 +142,7 @@ export interface RaceSnapshot {
     remainingPath: string[] | null;
     // Assigned at race start for bingo-family races; null in classic 'race'.
     color: string | null;
+    forfeitVote: boolean;
   }[];
   currentPage: string | null;
 }

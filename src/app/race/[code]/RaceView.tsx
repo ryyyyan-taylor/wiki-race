@@ -21,6 +21,7 @@ interface Props {
 interface OpponentProgress {
   status: string;
   pagesVisitedCount: number;
+  forfeitVote: boolean;
 }
 
 const MIN_SIDE_WIDTH = 150;
@@ -79,14 +80,14 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   const [hintSquare, setHintSquare] = useState(0);
   const [hintMenuOpen, setHintMenuOpen] = useState(false);
   const hintMenuRef = useRef<HTMLDivElement>(null);
-  const [hasForfeited, setHasForfeited] = useState(false);
+  const [forfeitVote, setForfeitVote] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Bumped on every *newly* forfeited opponent to replay the Forfeit
+  // Bumped on every *new* opponent forfeit vote to replay the Forfeit
   // button's attention flash (see handleRacePlayerChange) — mirrored
-  // outside React state so the "did this status just change" check doesn't
+  // outside React state so the "did this vote just change" check doesn't
   // depend on a stale closure over the previous render's opponentProgress.
   const [forfeitFlashNonce, setForfeitFlashNonce] = useState(0);
-  const opponentStatusRef = useRef<Record<string, string>>({});
+  const opponentVoteRef = useRef<Record<string, boolean>>({});
 
   const playerNames = useMemo(() => Object.fromEntries(players.map((p) => [p.id, p.name])), [players]);
   const isHost = useMemo(
@@ -96,15 +97,15 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   // opponentProgress's keys are every other race participant, fixed once
   // the race starts — no separate "total racers" fetch needed.
   const totalRacers = Object.keys(opponentProgress).length + 1;
-  const forfeitedCount =
-    Object.values(opponentProgress).filter((p) => p.status === "forfeited").length + (hasForfeited ? 1 : 0);
+  const forfeitVoteCount =
+    Object.values(opponentProgress).filter((p) => p.forfeitVote).length + (forfeitVote ? 1 : 0);
 
   useHostFailover(roomCode, players, identity);
 
   const navigate = useCallback(
     async (pageTitle: string) => {
       const id = identity;
-      if (!id || hasForfeited) return;
+      if (!id) return;
       setMessage(null);
       const res = await fetch(`/api/wiki/${roomCode}/page`, {
         method: "POST",
@@ -137,7 +138,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
       setCurrentTitle(data.title ?? null);
       setPagesVisited(data.pagesVisitedCount);
     },
-    [roomCode, hasForfeited, identity]
+    [roomCode, identity]
   );
 
   useEffect(() => {
@@ -170,7 +171,13 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         setBoardPages(data.race.boardPages);
         setClaims(data.race.claims ?? []);
         const opponents = (
-          data.race.players as { playerId: string; status: string; pagesVisitedCount: number; color: string | null }[]
+          data.race.players as {
+            playerId: string;
+            status: string;
+            pagesVisitedCount: number;
+            color: string | null;
+            forfeitVote: boolean;
+          }[]
         ).filter((rp) => rp.playerId !== id.playerId);
         setPlayerColors(
           Object.fromEntries(
@@ -178,20 +185,22 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           )
         );
         setOpponentProgress(
-          Object.fromEntries(opponents.map((rp) => [rp.playerId, { status: rp.status, pagesVisitedCount: rp.pagesVisitedCount }]))
+          Object.fromEntries(
+            opponents.map((rp) => [
+              rp.playerId,
+              { status: rp.status, pagesVisitedCount: rp.pagesVisitedCount, forfeitVote: rp.forfeitVote },
+            ])
+          )
         );
-        opponentStatusRef.current = Object.fromEntries(opponents.map((rp) => [rp.playerId, rp.status]));
-        const ownRacePlayer = (data.race.players as { playerId: string; status: string }[]).find(
+        opponentVoteRef.current = Object.fromEntries(opponents.map((rp) => [rp.playerId, rp.forfeitVote]));
+        const ownRacePlayer = (data.race.players as { playerId: string; forfeitVote: boolean }[]).find(
           (rp) => rp.playerId === id.playerId
         );
-        if (ownRacePlayer?.status === "forfeited") {
-          setHasForfeited(true);
-        } else {
-          navigate(data.race.currentPage ?? data.room.startPage);
-        }
+        setForfeitVote(ownRacePlayer?.forfeitVote ?? false);
+        navigate(data.race.currentPage ?? data.room.startPage);
       });
     // Only ever runs once at mount — navigate is intentionally excluded so
-    // a later hasForfeited-driven identity change doesn't re-trigger it.
+    // a later identity-driven navigate change doesn't re-trigger it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, router]);
 
@@ -228,14 +237,14 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
 
     const handleRacePlayerChange = (row: RacePlayerRow) => {
       if (row.player_id === ownId) return; // own count is authoritative from navigate()'s response
-      const previousStatus = opponentStatusRef.current[row.player_id];
-      opponentStatusRef.current[row.player_id] = row.status;
-      if (row.status === "forfeited" && previousStatus !== "forfeited") {
+      const previousVote = opponentVoteRef.current[row.player_id];
+      opponentVoteRef.current[row.player_id] = row.forfeit_vote;
+      if (row.forfeit_vote && !previousVote) {
         setForfeitFlashNonce((n) => n + 1);
       }
       setOpponentProgress((prev) => ({
         ...prev,
-        [row.player_id]: { status: row.status, pagesVisitedCount: row.pages_visited_count },
+        [row.player_id]: { status: row.status, pagesVisitedCount: row.pages_visited_count, forfeitVote: row.forfeit_vote },
       }));
     };
 
@@ -288,11 +297,11 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
     const res = await fetch(`/api/rooms/${roomCode}/forfeit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ playerId: id.playerId, token: id.token }),
+      body: JSON.stringify({ playerId: id.playerId, token: id.token, vote: !forfeitVote }),
     });
     setBusy(false);
-    if (res.ok) setHasForfeited(true);
-  }, [roomCode, identity]);
+    if (res.ok) setForfeitVote(!forfeitVote);
+  }, [roomCode, identity, forfeitVote]);
 
   const isBingo = gameMode !== "race";
   const squareHasMore = bingoHasMore[hintSquare] ?? { sentence: true, linked: true };
@@ -507,18 +516,19 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
               )}
             </div>
           )}
-          {!hasForfeited && (
-            <button
-              key={forfeitFlashNonce}
-              onClick={handleForfeit}
-              disabled={busy}
-              className={`rounded-full border px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-600 ${
-                forfeitFlashNonce > 0 ? "wiki-race-forfeit-flash" : ""
-              }`}
-            >
-              Forfeit ({forfeitedCount}/{totalRacers})
-            </button>
-          )}
+          <button
+            key={forfeitFlashNonce}
+            onClick={handleForfeit}
+            disabled={busy}
+            title={forfeitVote ? "Withdraw your forfeit vote" : "Vote to end the race — it ends once everyone votes"}
+            className={`rounded-full border px-3 py-1 text-sm disabled:opacity-50 ${
+              forfeitVote
+                ? "border-red-600 bg-red-600 text-white"
+                : `dark:border-zinc-600 ${forfeitFlashNonce > 0 ? "wiki-race-forfeit-flash" : ""}`
+            }`}
+          >
+            Forfeit ({forfeitVoteCount}/{totalRacers})
+          </button>
           <ThemeToggle />
         </div>
       </div>
@@ -528,6 +538,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           {Object.entries(opponentProgress).map(([playerId, p]) => (
             <span key={playerId}>
               {playerNames[playerId] ?? "Player"}: {p.pagesVisitedCount} {p.status !== "racing" && `(${p.status})`}
+              {p.forfeitVote && " (voted to forfeit)"}
             </span>
           ))}
         </div>
@@ -562,12 +573,6 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
 
       {message && <div className="bg-amber-100 text-amber-900 px-4 py-2 text-sm">{message}</div>}
 
-      {hasForfeited && (
-        <div className="bg-zinc-200 text-zinc-700 px-4 py-2 text-sm dark:bg-zinc-800 dark:text-zinc-300">
-          You forfeited — spectating until the race ends.
-        </div>
-      )}
-
       <iframe
         onLoad={handleIframeLoad}
         srcDoc={buildArticleSrcDoc(
@@ -581,7 +586,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           columnWidths.details
         )}
         title="Wikipedia article"
-        className={`flex-1 w-full border-0 bg-white ${hasForfeited ? "pointer-events-none opacity-60" : ""}`}
+        className="flex-1 w-full border-0 bg-white"
       />
 
       {gameMode !== "race" && boardSize && boardPages && (

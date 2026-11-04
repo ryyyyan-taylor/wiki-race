@@ -215,8 +215,8 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
   // accumulating.
 
   if (raceEndedByThisRequest && race.game_mode === "race") {
-    // For everyone still racing (i.e. not already forfeited — those got
-    // their distance computed when they forfeited), find how far they were
+    // For everyone still racing (forfeit votes don't take anyone out of the
+    // race, so that's every non-winner), find how far they were
     // from the finish from their last page. These searches can take several
     // seconds — run them after the response goes out and let the finish
     // page pick up each result via its `race_players` row subscription as
