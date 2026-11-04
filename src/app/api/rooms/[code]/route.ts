@@ -92,6 +92,7 @@ export const GET = withErrorHandling(async (request: Request, { params }: { para
       gameMode: latestRace.game_mode,
       boardSize: latestRace.board_size,
       boardPages: latestRace.board_pages,
+      bingoHints: latestRace.bingo_hints ?? {},
       claims: (claimsResult?.data ?? []).map((c) => ({
         squareIndex: c.square_index,
         playerId: c.player_id,

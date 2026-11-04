@@ -50,6 +50,14 @@ export interface RoomRow {
   board_size: number | null;
 }
 
+export interface BingoSquareHint {
+  text: string | null;
+  linkedPages: string[];
+}
+
+// Keyed by board square index (as a string, since it round-trips as jsonb).
+export type BingoHints = Record<string, BingoSquareHint>;
+
 export interface RaceRow {
   id: string;
   room_code: string;
@@ -65,6 +73,7 @@ export interface RaceRow {
   game_mode: GameMode;
   board_size: number | null;
   board_pages: string[] | null;
+  bingo_hints: BingoHints;
 }
 
 export interface RacePlayerRow {
@@ -117,6 +126,7 @@ export interface RaceSnapshot {
   gameMode: GameMode;
   boardSize: number | null;
   boardPages: string[] | null;
+  bingoHints: BingoHints;
   claims: BingoClaim[];
   players: {
     playerId: string;

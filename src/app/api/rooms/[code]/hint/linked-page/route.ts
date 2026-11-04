@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { authenticatePlayer } from "@/lib/auth";
-import { getLinkedPages } from "@/lib/wiki";
+import { nextLinkedPages, resolveHintPage } from "@/lib/hints";
+import type { BingoHints } from "@/lib/types";
 import { withErrorHandling } from "@/lib/api-route";
 
 export const POST = withErrorHandling(async (request: Request, { params }: { params: Promise<{ code: string }> }) => {
   const { code } = await params;
   const roomCode = code.toUpperCase();
-  const { playerId, token } = await request.json();
+  const { playerId, token, squareIndex } = await request.json();
 
   const supabase = supabaseAdmin();
   const player = await authenticatePlayer(supabase, roomCode, playerId, token);
@@ -27,26 +28,36 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     supabase.from("rooms").select("banned_pages").eq("code", roomCode).maybeSingle(),
   ]);
   if (!race) return NextResponse.json({ error: "No active race" }, { status: 409 });
-  if (race.game_mode !== "race") {
-    return NextResponse.json({ error: "Hints aren't available in this game mode" }, { status: 409 });
-  }
 
-  const bannedPages = new Set(room?.banned_pages ?? []);
-  const candidates = (await getLinkedPages(race.target_page)).filter(
-    (title) => title !== race.start_page && title !== race.target_page && !bannedPages.has(title)
+  const hintPage = resolveHintPage(race, squareIndex);
+  if (!hintPage) return NextResponse.json({ error: "Invalid board square" }, { status: 400 });
+
+  const bingoHints: BingoHints = race.bingo_hints ?? {};
+  const squareKey = String(squareIndex);
+  const alreadyRevealed: string[] =
+    race.game_mode === "race" ? race.linked_page_hints ?? [] : bingoHints[squareKey]?.linkedPages ?? [];
+
+  const result = await nextLinkedPages(
+    hintPage,
+    alreadyRevealed,
+    new Set([race.start_page, ...(room?.banned_pages ?? [])])
   );
-  if (candidates.length === 0) {
+  if (!result) {
     return NextResponse.json({ error: "Could not get a hint for this page" }, { status: 500 });
   }
 
-  const alreadyRevealed: string[] = race.linked_page_hints ?? [];
-  const nextCount = Math.min(alreadyRevealed.length + 1, candidates.length);
-  const pages = candidates.slice(0, nextCount);
-  const hasMore = nextCount < candidates.length;
-
-  if (pages.length !== alreadyRevealed.length) {
-    await supabase.from("races").update({ linked_page_hints: pages }).eq("id", race.id);
+  if (result.pages.length !== alreadyRevealed.length) {
+    const update =
+      race.game_mode === "race"
+        ? { linked_page_hints: result.pages }
+        : {
+            bingo_hints: {
+              ...bingoHints,
+              [squareKey]: { ...(bingoHints[squareKey] ?? { text: null }), linkedPages: result.pages },
+            },
+          };
+    await supabase.from("races").update(update).eq("id", race.id);
   }
 
-  return NextResponse.json({ pages, hasMore });
+  return NextResponse.json(result);
 });

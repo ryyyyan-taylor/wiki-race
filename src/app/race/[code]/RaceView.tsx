@@ -9,7 +9,7 @@ import { useHostFailover } from "@/lib/realtime/presence";
 import { getServerThemeSnapshot, getThemeSnapshot, subscribeTheme } from "@/lib/theme";
 import { displayTitle } from "@/lib/format";
 import { buildArticleSrcDoc, DEFAULT_DETAILS_WIDTH, DEFAULT_TOC_WIDTH } from "@/lib/wiki-render";
-import type { BingoClaim, BingoClaimRow, GameMode, Player, RaceRow, RacePlayerRow } from "@/lib/types";
+import type { BingoClaim, BingoClaimRow, BingoHints, GameMode, Player, RaceRow, RacePlayerRow } from "@/lib/types";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { BingoBoard } from "@/components/BingoBoard";
 
@@ -72,6 +72,11 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   // Same optimistic assumption as hintHasMore, until the server reports the
   // actual number of pages that link to the target.
   const [linkedPageHasMore, setLinkedPageHasMore] = useState(true);
+  const [bingoHints, setBingoHints] = useState<BingoHints>({});
+  // Per-square equivalents of hintHasMore/linkedPageHasMore, with the same
+  // optimistic default for squares the server hasn't reported on yet.
+  const [bingoHasMore, setBingoHasMore] = useState<Record<number, { sentence: boolean; linked: boolean }>>({});
+  const [hintSquare, setHintSquare] = useState(0);
   const [hintMenuOpen, setHintMenuOpen] = useState(false);
   const hintMenuRef = useRef<HTMLDivElement>(null);
   const [hasForfeited, setHasForfeited] = useState(false);
@@ -159,6 +164,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         setStartedAt(data.race.startedAt);
         setHintText(data.race.hintText);
         setLinkedPageHints(data.race.linkedPageHints ?? []);
+        setBingoHints(data.race.bingoHints ?? {});
         setGameMode(data.race.gameMode);
         setBoardSize(data.race.boardSize);
         setBoardPages(data.race.boardPages);
@@ -214,6 +220,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
     const handleRaceChange = (row: RaceRow) => {
       if (row.hint_text) setHintText(row.hint_text);
       if (row.linked_page_hints?.length) setLinkedPageHints(row.linked_page_hints);
+      if (row.bingo_hints) setBingoHints(row.bingo_hints);
       if (row.status === "finished" || row.status === "all_forfeited") {
         router.push(`/finish/${roomCode}`);
       }
@@ -287,39 +294,66 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
     if (res.ok) setHasForfeited(true);
   }, [roomCode, identity]);
 
+  const isBingo = gameMode !== "race";
+  const squareHasMore = bingoHasMore[hintSquare] ?? { sentence: true, linked: true };
+  const sentenceHasMore = isBingo ? squareHasMore.sentence : hintHasMore;
+  const linkedHasMore = isBingo ? squareHasMore.linked : linkedPageHasMore;
+
   const handleHint = useCallback(async () => {
     const id = identity;
     if (!id) return;
     setBusy(true);
+    const squareIndex = isBingo ? hintSquare : undefined;
     const res = await fetch(`/api/rooms/${roomCode}/hint`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ playerId: id.playerId, token: id.token }),
+      body: JSON.stringify({ playerId: id.playerId, token: id.token, squareIndex }),
     });
     const data = await res.json();
     setBusy(false);
-    if (res.ok) {
+    if (!res.ok) return;
+    if (squareIndex === undefined) {
       setHintText(data.hint);
       setHintHasMore(Boolean(data.hasMore));
+    } else {
+      setBingoHints((prev) => ({
+        ...prev,
+        [squareIndex]: { ...(prev[squareIndex] ?? { linkedPages: [] }), text: data.hint },
+      }));
+      setBingoHasMore((prev) => ({
+        ...prev,
+        [squareIndex]: { ...(prev[squareIndex] ?? { linked: true }), sentence: Boolean(data.hasMore) },
+      }));
     }
-  }, [roomCode, identity]);
+  }, [roomCode, identity, isBingo, hintSquare]);
 
   const handleLinkedPageHint = useCallback(async () => {
     const id = identity;
     if (!id) return;
     setBusy(true);
+    const squareIndex = isBingo ? hintSquare : undefined;
     const res = await fetch(`/api/rooms/${roomCode}/hint/linked-page`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ playerId: id.playerId, token: id.token }),
+      body: JSON.stringify({ playerId: id.playerId, token: id.token, squareIndex }),
     });
     const data = await res.json();
     setBusy(false);
-    if (res.ok) {
+    if (!res.ok) return;
+    if (squareIndex === undefined) {
       setLinkedPageHints(data.pages);
       setLinkedPageHasMore(Boolean(data.hasMore));
+    } else {
+      setBingoHints((prev) => ({
+        ...prev,
+        [squareIndex]: { ...(prev[squareIndex] ?? { text: null }), linkedPages: data.pages },
+      }));
+      setBingoHasMore((prev) => ({
+        ...prev,
+        [squareIndex]: { ...(prev[squareIndex] ?? { sentence: true }), linked: Boolean(data.hasMore) },
+      }));
     }
-  }, [roomCode, identity]);
+  }, [roomCode, identity, isBingo, hintSquare]);
 
   useEffect(() => {
     if (!hintMenuOpen) return;
@@ -417,23 +451,42 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm">Pages visited: {pagesVisited}</span>
-          {isHost && gameMode === "race" && (
+          {isHost && (
             <div className="relative" ref={hintMenuRef}>
               <button
                 onClick={() => setHintMenuOpen((open) => !open)}
-                disabled={busy || (!hintHasMore && !linkedPageHasMore)}
+                disabled={busy || (!isBingo && !hintHasMore && !linkedPageHasMore)}
                 className="rounded-full border px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-600"
               >
                 💡 Hint ▾
               </button>
               {hintMenuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-40 rounded border bg-white text-sm shadow-lg z-10 dark:bg-zinc-900 dark:border-zinc-600">
+                <div
+                  className={`absolute right-0 top-full mt-1 rounded border bg-white text-sm shadow-lg z-10 dark:bg-zinc-900 dark:border-zinc-600 ${
+                    isBingo ? "w-64" : "w-40"
+                  }`}
+                >
+                  {isBingo && boardPages && (
+                    <div className="max-h-60 overflow-y-auto border-b dark:border-zinc-600">
+                      {boardPages.map((page, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setHintSquare(i)}
+                          className={`block w-full truncate px-3 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                            i === hintSquare ? "bg-sky-100 font-semibold text-sky-900 hover:bg-sky-100 dark:hover:bg-sky-100" : ""
+                          }`}
+                        >
+                          {displayTitle(page)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <button
                     onClick={() => {
                       setHintMenuOpen(false);
                       handleHint();
                     }}
-                    disabled={busy || !hintHasMore}
+                    disabled={busy || !sentenceHasMore}
                     title={hintText ? "Reveal another sentence" : "Reveal a hint"}
                     className="block w-full px-3 py-2 text-left disabled:opacity-50 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   >
@@ -444,7 +497,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
                       setHintMenuOpen(false);
                       handleLinkedPageHint();
                     }}
-                    disabled={busy || !linkedPageHasMore}
+                    disabled={busy || !linkedHasMore}
                     title={linkedPageHints.length ? "Reveal another linked page" : "Reveal a page that links to the target"}
                     className="block w-full px-3 py-2 text-left disabled:opacity-50 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   >
@@ -491,6 +544,21 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           <strong>Links to target:</strong> {linkedPageHints.map(displayTitle).join(", ")}
         </div>
       )}
+
+      {boardPages &&
+        Object.entries(bingoHints)
+          .sort(([a], [b]) => Number(a) - Number(b))
+          .map(([index, squareHint]) => (
+            <div key={index} className="bg-sky-100 text-sky-900 px-4 py-2 text-sm">
+              <strong>{displayTitle(boardPages[Number(index)])}:</strong> {squareHint.text}
+              {squareHint.linkedPages.length > 0 && (
+                <>
+                  {squareHint.text && " · "}
+                  <strong>Linked from:</strong> {squareHint.linkedPages.map(displayTitle).join(", ")}
+                </>
+              )}
+            </div>
+          ))}
 
       {message && <div className="bg-amber-100 text-amber-900 px-4 py-2 text-sm">{message}</div>}
 
