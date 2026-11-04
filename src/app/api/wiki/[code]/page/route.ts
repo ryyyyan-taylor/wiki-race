@@ -12,8 +12,8 @@ const UNIQUE_VIOLATION = "23505";
 export const POST = withErrorHandling(async (request: Request, { params }: { params: Promise<{ code: string }> }) => {
   const { code } = await params;
   const roomCode = code.toUpperCase();
-  const { playerId, token, title } = await request.json();
-  if (!title) return NextResponse.json({ error: "title is required" }, { status: 400 });
+  const { playerId, token, title: requestedTitle, back } = await request.json();
+  if (!requestedTitle && !back) return NextResponse.json({ error: "title is required" }, { status: 400 });
 
   const supabase = supabaseAdmin();
 
@@ -42,6 +42,9 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     return NextResponse.json({ error: "No race in progress" }, { status: 409 });
   }
   if (!race) return NextResponse.json({ error: "No active race" }, { status: 409 });
+
+  const title = back ? await previousPage(supabase, race.id, race.start_page, playerId) : requestedTitle;
+  if (!title) return NextResponse.json({ status: "no_previous" });
 
   const [racePlayerResult, article] = await Promise.all([
     supabase.from("race_players").select("*").eq("race_id", race.id).eq("player_id", playerId).single(),
@@ -249,3 +252,24 @@ export const POST = withErrorHandling(async (request: Request, { params }: { par
     pagesVisitedCount,
   });
 });
+
+// The emergency back button walks the player's history like a browser back
+// stack: going back is recorded as an ordinary visit, and collapsing loops
+// out of the log means a second back continues further back instead of
+// bouncing between the last two pages. The start page is never a visits
+// row (see the start route), so it's prepended as the bottom of the stack.
+async function previousPage(
+  supabase: ReturnType<typeof supabaseAdmin>,
+  raceId: string,
+  startPage: string,
+  playerId: string
+): Promise<string | null> {
+  const { data: visits } = await supabase
+    .from("visits")
+    .select("page_title")
+    .eq("race_id", raceId)
+    .eq("player_id", playerId)
+    .order("sequence_index", { ascending: true });
+  const path = collapseToShortestPath([startPage, ...(visits ?? []).map((v) => v.page_title)]);
+  return path.at(-2) ?? null;
+}
