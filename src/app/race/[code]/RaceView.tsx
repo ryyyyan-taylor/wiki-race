@@ -12,6 +12,8 @@ import { buildArticleSrcDoc, DEFAULT_DETAILS_WIDTH, DEFAULT_TOC_WIDTH } from "@/
 import type { BingoClaim, BingoClaimRow, BingoHints, GameMode, Player, RaceRow, RacePlayerRow } from "@/lib/types";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { BingoBoard } from "@/components/BingoBoard";
+import { HoldBackButton } from "@/components/HoldBackButton";
+import { Toasts, useToasts } from "@/components/Toasts";
 
 interface Props {
   roomCode: string;
@@ -90,6 +92,13 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
   const opponentVoteRef = useRef<Record<string, boolean>>({});
 
   const playerNames = useMemo(() => Object.fromEntries(players.map((p) => [p.id, p.name])), [players]);
+  const { toasts, showToast } = useToasts();
+  // Read from the bingo_claims subscription callback, which outlives any one
+  // render's playerNames/playerColors and shouldn't resubscribe when they change.
+  const claimToastInfoRef = useRef({ playerNames, playerColors });
+  useEffect(() => {
+    claimToastInfoRef.current = { playerNames, playerColors };
+  }, [playerNames, playerColors]);
   const isHost = useMemo(
     () => players.find((p) => p.id === identity?.playerId)?.isHost ?? false,
     [players, identity]
@@ -102,15 +111,15 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
 
   useHostFailover(roomCode, players, identity);
 
-  const navigate = useCallback(
-    async (pageTitle: string) => {
+  const requestPage = useCallback(
+    async (pageRequest: { title: string } | { back: true }) => {
       const id = identity;
       if (!id) return;
       setMessage(null);
       const res = await fetch(`/api/wiki/${roomCode}/page`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ playerId: id.playerId, token: id.token, title: pageTitle }),
+        body: JSON.stringify({ playerId: id.playerId, token: id.token, ...pageRequest }),
       });
       const data = await res.json();
 
@@ -128,6 +137,10 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
         setMessage(`${displayTitle(data.title)} is banned in this room.`);
         return;
       }
+      if (data.status === "no_previous") {
+        setMessage("You're on your starting page — there's nowhere to go back to.");
+        return;
+      }
       if (data.status === "not_found") {
         setMessage("That page doesn't exist.");
         return;
@@ -140,6 +153,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
     },
     [roomCode, identity]
   );
+  const navigate = useCallback((pageTitle: string) => requestPage({ title: pageTitle }), [requestPage]);
 
   useEffect(() => {
     const id = identity;
@@ -275,7 +289,15 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           : [...prev, { squareIndex: row.square_index, playerId: row.player_id, pageTitle: row.page_title }]
       );
     };
-    const channel = subscribeBingoClaims(raceId, applyClaim);
+    const ownId = identity?.playerId;
+    // Only live INSERTs toast — the gap-closing fetch below replays claims
+    // made before this client subscribed, which aren't news.
+    const channel = subscribeBingoClaims(raceId, (row) => {
+      applyClaim(row);
+      if (row.race_id !== raceId || row.player_id === ownId) return;
+      const { playerNames: names, playerColors: colors } = claimToastInfoRef.current;
+      showToast(`${names[row.player_id] ?? "Someone"} found ${displayTitle(row.page_title)}`, colors[row.player_id]);
+    });
     // Closes the same mount-to-subscribe gap as the races/race_players
     // subscription above.
     supabaseBrowser()
@@ -288,7 +310,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
     return () => {
       channel.unsubscribe();
     };
-  }, [raceId, gameMode]);
+  }, [raceId, gameMode, identity?.playerId, showToast]);
 
   const handleForfeit = useCallback(async () => {
     const id = identity;
@@ -451,6 +473,7 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex items-center justify-between border-b px-4 py-2 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-800">
         <div className="flex items-center gap-4 text-sm">
+          <HoldBackButton onBack={() => requestPage({ back: true })} disabled={busy} />
           <span className="font-mono">{formatElapsed(elapsedMs)}</span>
           {gameMode === "race" && (
             <span>
@@ -597,6 +620,8 @@ export function RaceView({ roomCode, stylesheetHrefs }: Props) {
           players={Object.entries(playerColors).map(([id, color]) => ({ id, color }))}
         />
       )}
+
+      <Toasts toasts={toasts} />
     </div>
   );
 }
